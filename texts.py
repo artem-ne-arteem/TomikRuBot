@@ -30,6 +30,7 @@ RU = {
     "unrated": "не оценена",
     "lang_prompt": "🌐 Выбери язык / Choose language",
     "lang_set": "Язык: русский 🇷🇺",
+    "your_id": "Твой Telegram ID: <code>{id}</code>",
     # --- поиск и добавление ---
     "searching": "🔎 Ищу...",
     "nothing_found": "Ничего не нашёл 😕 Попробуй другой запрос или добавь книгу вручную.",
@@ -321,6 +322,7 @@ EN = {
     "unrated": "not rated",
     "lang_prompt": "🌐 Выбери язык / Choose language",
     "lang_set": "Language: English 🇬🇧",
+    "your_id": "Your Telegram ID: <code>{id}</code>",
     # --- search and adding ---
     "searching": "🔎 Searching...",
     "nothing_found": "Nothing found 😕 Try another query or add the book manually.",

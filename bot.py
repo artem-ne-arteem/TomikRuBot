@@ -30,9 +30,11 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
     BufferedInputFile,
     CallbackQuery,
     ChatMemberUpdated,
+    ErrorEvent,
     FSInputFile,
     InlineKeyboardButton,
     Message,
@@ -57,6 +59,7 @@ def load_env(path: str = ".env") -> None:
 load_env()
 PROXY = os.getenv("PROXY") or None  # например http://127.0.0.1:8080
 START_PHOTO = os.getenv("START_PHOTO", "start.png")  # картинка для /start (путь к файлу)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or 0)  # твой Telegram ID (узнай командой /id)
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise SystemExit("Положи токен в файл .env: BOT_TOKEN=...")
@@ -74,6 +77,7 @@ PAGE_SIZE = 8  # книг на странице полки
 STATUS_KEYS = ("want", "reading", "done", "dropped")
 UNKNOWN_AUTHORS = {"", "—", "Автор неизвестен", "Unknown author"}
 BOT_USERNAME = ""  # заполняется при старте
+BOT_REF = None  # объект бота для фоновых уведомлений
 
 # ---------- БД ----------
 db = sqlite3.connect("tomik.db", check_same_thread=False)
@@ -143,6 +147,10 @@ db.executescript(
         ended_ts INTEGER,
         minutes INTEGER
     );
+    CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
     """
 )
 
@@ -174,6 +182,9 @@ add_cols(
         ("goal_month", "INTEGER"),
         ("weekly_on", "INTEGER DEFAULT 0"),
         ("weekly_last", "TEXT"),
+        ("source", "TEXT"),
+        ("joined_at", "TEXT"),
+        ("last_seen", "TEXT"),
     ],
 )
 add_cols("reading_log", [("minutes", "INTEGER DEFAULT 0")])
@@ -222,14 +233,20 @@ def t(uid: int, key: str, **kw) -> str:
 
 def touch_user(u) -> None:
     name = (u.full_name or u.username or str(u.id))[:60]
-    row = db.execute("SELECT lang, name FROM users WHERE user_id=?", (u.id,)).fetchone()
+    today = today_str()
+    row = db.execute("SELECT lang, name, last_seen FROM users WHERE user_id=?", (u.id,)).fetchone()
     if row is None:
         lang = guess_lang(u.language_code)
-        db.execute("INSERT INTO users (user_id, name, lang) VALUES (?,?,?)", (u.id, name, lang))
+        db.execute(
+            "INSERT INTO users (user_id, name, lang, joined_at, last_seen) VALUES (?,?,?,?,?)",
+            (u.id, name, lang, now_local().isoformat(), today),
+        )
     else:
         lang = row["lang"] or guess_lang(u.language_code)
-        if row["lang"] != lang or row["name"] != name:
-            db.execute("UPDATE users SET lang=?, name=? WHERE user_id=?", (lang, name, u.id))
+        if row["lang"] != lang or row["name"] != name or row["last_seen"] != today:
+            db.execute(
+                "UPDATE users SET lang=?, name=?, last_seen=? WHERE user_id=?", (lang, name, today, u.id)
+            )
     LANG[u.id] = lang
     db.commit()
 
@@ -1047,8 +1064,16 @@ async def send_start(bot: Bot, chat_id: int, uid: int) -> None:
 
 
 @pr.message(CommandStart())
-async def start(m: Message):
-    await send_start(m.bot, m.chat.id, m.from_user.id)
+async def start(m: Message, command: CommandObject):
+    uid = m.from_user.id
+    src = re.sub(r"[^\w\-]", "", command.args or "")[:32]  # метка источника: t.me/бот?start=метка
+    if src:
+        db.execute(
+            "UPDATE users SET source=? WHERE user_id=? AND source IS NULL AND joined_at>=?",
+            (src, uid, (now_local() - timedelta(hours=1)).isoformat()),
+        )
+        db.commit()
+    await send_start(m.bot, m.chat.id, uid)
 
 
 @pr.message(Command("shelf"))
@@ -2742,6 +2767,144 @@ def group_week_text(chat_id: int, lang: str) -> str:
 
 
 # ======================================================================
+#   АДМИН: /id, /users, /backup, ежедневная копия базы, уведомления об ошибках
+# ======================================================================
+def is_owner(uid: int) -> bool:
+    return bool(ADMIN_ID) and uid == ADMIN_ID
+
+
+def get_meta(key: str) -> str | None:
+    r = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return r["value"] if r else None
+
+
+def set_meta(key: str, value: str) -> None:
+    db.execute(
+        "INSERT INTO meta (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+    db.commit()
+
+
+@pr.message(Command("id"))
+async def id_cmd(m: Message):
+    await m.answer(t(m.from_user.id, "your_id", id=m.from_user.id))
+
+
+def admin_stats() -> str:
+    today = now_local().date()
+    iso = lambda n: (today - timedelta(days=n)).isoformat()
+
+    def one(sql: str, *args) -> int:
+        return db.execute(sql, args).fetchone()[0] or 0
+
+    total = one("SELECT COUNT(*) FROM users")
+    lines = [
+        "📊 <b>Статистика бота</b>",
+        "",
+        f"👥 Пользователей: {total} (🇷🇺 {one('SELECT COUNT(*) FROM users WHERE lang=?', 'ru')} · 🇬🇧 {one('SELECT COUNT(*) FROM users WHERE lang=?', 'en')})",
+        f"🆕 Новых: сегодня {one('SELECT COUNT(*) FROM users WHERE joined_at>=?', iso(0))}"
+        f" · 7 дн. {one('SELECT COUNT(*) FROM users WHERE joined_at>=?', iso(6))}"
+        f" · 30 дн. {one('SELECT COUNT(*) FROM users WHERE joined_at>=?', iso(29))}",
+        f"🟢 Активных: сегодня {one('SELECT COUNT(*) FROM users WHERE last_seen>=?', iso(0))}"
+        f" · 7 дн. {one('SELECT COUNT(*) FROM users WHERE last_seen>=?', iso(6))}"
+        f" · 30 дн. {one('SELECT COUNT(*) FROM users WHERE last_seen>=?', iso(29))}",
+        "",
+        f"📚 Добавили книги: {one('SELECT COUNT(DISTINCT user_id) FROM books')} польз. · всего книг {one('SELECT COUNT(*) FROM books')}",
+        f"📄 Записали страницы за 7 дн.: {one('SELECT COUNT(DISTINCT user_id) FROM reading_log WHERE day>=?', iso(6))} польз. "
+        f"({one('SELECT SUM(pages) FROM reading_log WHERE day>=?', iso(6))} стр.)",
+        f"👥 Групп: {one('SELECT COUNT(*) FROM chat_groups')} · участников рейтинга {one('SELECT COUNT(*) FROM group_members')}",
+    ]
+    src = db.execute(
+        "SELECT COALESCE(source, 'прямой заход') s, COUNT(*) c FROM users "
+        "WHERE joined_at IS NOT NULL GROUP BY s ORDER BY c DESC LIMIT 15"
+    ).fetchall()
+    if src:
+        lines += ["", "🔗 <b>Откуда пришли</b> (после включения учёта):"]
+        lines += [f"   {escape(r['s'])} — {r['c']}" for r in src]
+    old = one("SELECT COUNT(*) FROM users WHERE joined_at IS NULL")
+    if old:
+        lines.append(f"   до учёта — {old}")
+    return "\n".join(lines)
+
+
+@pr.message(Command("users"))
+async def users_cmd(m: Message):
+    if is_owner(m.from_user.id):
+        await m.answer(admin_stats())
+
+
+def make_backup() -> tuple[str, bytes]:
+    """Консистентная копия базы (sqlite backup API) + хранение 14 дней в папке backups."""
+    os.makedirs("backups", exist_ok=True)
+    name = f"tomik-{today_str()}.db"
+    path = os.path.join("backups", name)
+    dst = sqlite3.connect(path)
+    try:
+        db.backup(dst)
+    finally:
+        dst.close()
+    cutoff = time.time() - 14 * 86400
+    for f in os.listdir("backups"):
+        fp = os.path.join("backups", f)
+        if f.startswith("tomik-") and os.path.getmtime(fp) < cutoff:
+            os.remove(fp)
+    with open(path, "rb") as fh:
+        return name, fh.read()
+
+
+async def send_backup(bot: Bot) -> None:
+    try:
+        name, data = make_backup()
+        if len(data) > 49 * 1024 * 1024:
+            await bot.send_message(ADMIN_ID, "⚠️ База больше 49 МБ, Telegram не примет такой файл.")
+            return
+        await bot.send_document(
+            ADMIN_ID,
+            BufferedInputFile(data, filename=name),
+            caption=f"💾 Резервная копия базы ({max(1, len(data) // 1024)} КБ)",
+        )
+    except Exception:
+        logging.exception("backup failed")
+
+
+@pr.message(Command("backup"))
+async def backup_cmd(m: Message):
+    if is_owner(m.from_user.id):
+        await send_backup(m.bot)
+
+
+async def set_admin_commands(bot: Bot) -> None:
+    cmds = [BotCommand(command=c, description=tl("ru", f"cmd_{c}")) for c in (
+        "shelf", "timer", "recs", "stats", "week", "goal", "remind", "add", "import", "read", "export", "lang", "cancel"
+    )]
+    cmds += [
+        BotCommand(command="users", description="Статистика бота"),
+        BotCommand(command="backup", description="Копия базы сейчас"),
+        BotCommand(command="id", description="Мой Telegram ID"),
+    ]
+    await bot.set_my_commands(cmds, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+
+
+_last_error_ts = 0.0
+
+
+@dp.errors()
+async def on_error(event: ErrorEvent):
+    """Любая необработанная ошибка в обработчиках: в лог и (не чаще раза в минуту) тебе в личку."""
+    global _last_error_ts
+    logging.error("handler error: %r", event.exception, exc_info=event.exception)
+    if ADMIN_ID and BOT_REF and time.time() - _last_error_ts > 60:
+        _last_error_ts = time.time()
+        try:
+            msg = f"{type(event.exception).__name__}: {event.exception}"[:300]
+            await BOT_REF.send_message(ADMIN_ID, f"⚠️ <b>Ошибка в боте</b>\n<code>{escape(msg)}</code>")
+        except Exception:
+            pass
+    return True
+
+
+# ======================================================================
 #                   ФОНОВЫЕ ЗАДАЧИ: напоминания и итоги дня
 # ======================================================================
 async def reminder_loop(bot: Bot) -> None:
@@ -2777,6 +2940,10 @@ async def reminder_loop(bot: Bot) -> None:
                         drop_group(g["chat_id"])
                     except Exception:
                         logging.exception("digest failed for %s", g["chat_id"])
+
+            if ADMIN_ID and now_min >= 240 and get_meta("last_backup") != today:  # копия базы после 04:00
+                set_meta("last_backup", today)
+                await send_backup(bot)
 
             if now.weekday() == 0 and 600 <= now_min < 610:  # понедельник 10:00: итоги прошлой недели
                 for u in db.execute(
@@ -2841,12 +3008,15 @@ dp.include_router(gr)
 
 
 async def main():
-    global BOT_USERNAME
+    global BOT_USERNAME, BOT_REF
     logging.basicConfig(level=logging.INFO)
     bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    BOT_REF = bot
     BOT_USERNAME = (await bot.get_me()).username or ""
     try:
         await set_commands(bot)
+        if ADMIN_ID:
+            await set_admin_commands(bot)
     except Exception:
         logging.exception("не удалось выставить меню команд")
     task = asyncio.create_task(reminder_loop(bot))
