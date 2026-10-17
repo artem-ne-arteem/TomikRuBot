@@ -1,0 +1,5 @@
+aiogram>=3.7
+aiohttp
+zxing-cpp
+pillow
+tzdata
