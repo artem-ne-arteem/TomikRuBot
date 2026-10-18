@@ -151,6 +151,12 @@ db.executescript(
         key TEXT PRIMARY KEY,
         value TEXT
     );
+    CREATE TABLE IF NOT EXISTS badges (
+        user_id INTEGER NOT NULL,
+        code TEXT NOT NULL,
+        earned_at TEXT,
+        PRIMARY KEY (user_id, code)
+    );
     """
 )
 
@@ -1185,6 +1191,7 @@ async def read_impl(m: Message, command: CommandObject, group: bool) -> None:
         text += "\n" + tl(lang, "streak_line", n=cur)
     await m.answer(text)
     await check_challenges(m.bot, uid)
+    await announce_badges(m.bot, uid, m.chat.id)
 
 
 @pr.message(Command("read"))
@@ -1364,6 +1371,7 @@ async def handle_progress(m: Message) -> bool:
             note += "\n" + gl
     await send_card(m.bot, m.chat.id, nb, note)
     await check_challenges(m.bot, uid)
+    await announce_badges(m.bot, uid, m.chat.id)
     return True
 
 
@@ -1471,6 +1479,8 @@ async def cb_status(c: CallbackQuery):
         await update_card(c, b)
     popup = (goal_line(uid) if status == "done" else "") or t(uid, "status_updated")
     await c.answer(popup)
+    if status == "done":
+        await announce_badges(c.bot, uid, c.message.chat.id)
 
 
 @pr.callback_query(F.data.startswith("rate:"))
@@ -1602,6 +1612,7 @@ async def handle_note(m: Message) -> None:
     db.commit()
     view, kb = notes_view(book_id, uid)
     await m.answer(t(uid, "saved") + "\n\n" + view, reply_markup=kb)
+    await announce_badges(m.bot, uid, m.chat.id)
 
 
 @pr.callback_query(F.data.startswith("notes:"))
@@ -1989,6 +2000,7 @@ async def cb_tstop(c: CallbackQuery):
         text += "\n\n" + t(uid, key, title=escape(b["title"])) + "\n" + t(uid, "timer_skip_hint")
     await replace_text(c, text, None)
     await c.answer()
+    await announce_badges(c.bot, uid, c.message.chat.id)
 
 
 @pr.callback_query(F.data.startswith("tcancel:"))
@@ -2372,6 +2384,7 @@ async def import_csv(m: Message) -> None:
         await msg.edit_text(t(uid, "import_bad_format"))
         return
     added, dups, bad = import_rows(uid, rows, cols)
+    check_badges(uid)  # значки за импортированные книги выдаём молча
     await msg.edit_text(t(uid, "import_done", added=added, dups=dups, bad=bad))
 
 
@@ -2767,6 +2780,311 @@ def group_week_text(chat_id: int, lang: str) -> str:
 
 
 # ======================================================================
+#              ЗНАЧКИ И КАРТИНКА С ИТОГАМИ ДЛЯ ШЕРИНГА
+# ======================================================================
+BADGE_FAMILIES = {
+    "books": (1, 5, 10, 25, 50, 100),
+    "pages": (500, 1000, 5000, 10000, 25000),
+    "streak": (3, 7, 14, 30, 100),
+    "hours": (1, 10, 50, 100),
+    "notes": (1, 10, 50),
+    "genres": (3, 5, 10),
+}
+TIER_ICONS = ["🥉", "🥈", "🥇", "🏆", "💎", "👑"]
+
+
+def badge_metrics(uid: int) -> dict[str, int]:
+    one = lambda sql: db.execute(sql, (uid,)).fetchone()[0] or 0
+    return {
+        "books": one("SELECT COUNT(*) FROM books WHERE user_id=? AND status='done'"),
+        "pages": pages_between(uid, "0000-01-01"),
+        "streak": streaks(uid)[1],
+        "hours": minutes_between(uid, "0000-01-01") // 60,
+        "notes": one("SELECT COUNT(*) FROM notes WHERE user_id=?"),
+        "genres": one("SELECT COUNT(DISTINCT genre) FROM books WHERE user_id=? AND genre IS NOT NULL"),
+    }
+
+
+def check_badges(uid: int) -> list[tuple[str, int, int]]:
+    """Выдаёт новые значки. Возвращает [(семейство, порог, номер ступени)]."""
+    m = badge_metrics(uid)
+    have = {r["code"] for r in db.execute("SELECT code FROM badges WHERE user_id=?", (uid,))}
+    new = []
+    for fam, tiers in BADGE_FAMILIES.items():
+        for i, n in enumerate(tiers):
+            code = f"{fam}_{n}"
+            if m[fam] >= n and code not in have:
+                db.execute(
+                    "INSERT OR IGNORE INTO badges (user_id, code, earned_at) VALUES (?,?,?)",
+                    (uid, code, today_str()),
+                )
+                new.append((fam, n, i))
+    if new:
+        db.commit()
+    return new
+
+
+async def announce_badges(bot: Bot, uid: int, chat_id: int | None = None) -> None:
+    try:
+        new = check_badges(uid)
+        if new:
+            names = "\n".join(f"{TIER_ICONS[i]} {t(uid, 'bdl_' + fam)}: {n}" for fam, n, i in new)
+            await bot.send_message(chat_id or uid, t(uid, "bd_new", names=names))
+    except Exception:
+        logging.exception("badge announce failed")
+
+
+def badges_text(uid: int) -> str:
+    check_badges(uid)
+    m = badge_metrics(uid)
+    have = {r["code"] for r in db.execute("SELECT code FROM badges WHERE user_id=?", (uid,))}
+    total = sum(len(v) for v in BADGE_FAMILIES.values())
+    lines = [t(uid, "bd_head", got=len(have), total=total), ""]
+    for fam, tiers in BADGE_FAMILIES.items():
+        earned = " ".join(f"{TIER_ICONS[i]}{n}" for i, n in enumerate(tiers) if f"{fam}_{n}" in have)
+        nxt = next((n for n in tiers if f"{fam}_{n}" not in have), None)
+        tail = t(uid, "bd_next", n=nxt, cur=m[fam]) if nxt else t(uid, "bd_max")
+        lines.append(f"{t(uid, 'bdl_' + fam)}: {earned or '—'}{tail}")
+    lines += ["", t(uid, "bd_hint")]
+    return "\n".join(lines)
+
+
+@pr.message(Command("badges"))
+async def badges_cmd(m: Message):
+    await m.answer(badges_text(m.from_user.id))
+
+
+# ---------- Картинка с итогами ----------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_BOLD = [
+    os.getenv("FONT_BOLD", ""),
+    os.path.join(BASE_DIR, "fonts", "DejaVuSans-Bold.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+]
+FONT_REG = [
+    os.getenv("FONT_REG", ""),
+    os.path.join(BASE_DIR, "fonts", "DejaVuSans.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+]
+
+
+def find_font(candidates: list[str]) -> str | None:
+    return next((p for p in candidates if p and os.path.isfile(p)), None)
+
+
+def fmt_num(n: int) -> str:
+    return f"{n:,}".replace(",", " ")
+
+
+def card_data(uid: int, period: str) -> dict | None:
+    today = now_local().date()
+    months_full = t(uid, "months_full").split()
+    months_short = t(uid, "months_short").split()
+    start = {"month": month_start(), "year": year_start()}.get(period, "0000-01-01")
+    if period == "all":
+        done = db.execute("SELECT * FROM books WHERE user_id=? AND status='done'", (uid,)).fetchall()
+    else:
+        done = db.execute(
+            "SELECT * FROM books WHERE user_id=? AND status='done' AND finished_at>=?", (uid, start)
+        ).fetchall()
+    pages = pages_between(uid, start)
+    minutes = minutes_between(uid, start)
+    if not (done or pages or minutes):
+        return None
+    ratings = [b["rating"] for b in done if b["rating"]]
+    avg = sum(ratings) / len(ratings) if ratings else None
+    fav = sorted(done, key=lambda b: (b["rating"] or 0, b["finished_at"] or ""), reverse=True)[:3]
+
+    if minutes:
+        hrs = f"{minutes // 60} {t(uid, 'card_h')}" if minutes >= 60 else f"{minutes} {t(uid, 'card_m')}"
+        third = (hrs, t(uid, "card_s_hours"))
+    else:
+        third = (f"{avg:.1f}" if avg else "—", t(uid, "card_s_rating"))
+
+    if period == "month":
+        stats = day_stats(uid, start, today.isoformat())
+        n_days = calendar.monthrange(today.year, today.month)[1]
+        bars = [
+            (
+                str(d) if d in (1, 5, 10, 15, 20, 25, 30) else "",
+                stats.get(date(today.year, today.month, d).isoformat(), (0, 0))[0],
+            )
+            for d in range(1, n_days + 1)
+        ]
+        bars_title = t(uid, "card_bars_days")
+        title = t(uid, "card_title_month")
+        subtitle = f"{months_full[today.month - 1].capitalize()} {today.year}"
+    else:
+        per = Counter((b["finished_at"] or "")[:7] for b in done)
+        if period == "year":
+            seq = [(today.year, m) for m in range(1, 13)]
+            title = t(uid, "card_title_year", y=today.year)
+            subtitle = str(today.year)
+        else:
+            y, m, seq = today.year, today.month, []
+            for _ in range(12):
+                seq.append((y, m))
+                m -= 1
+                if m == 0:
+                    y, m = y - 1, 12
+            seq.reverse()
+            title = t(uid, "card_title_all")
+            subtitle = t(uid, "card_sub_all")
+        bars = [(months_short[m - 1], per.get(f"{y}-{m:02d}", 0)) for y, m in seq]
+        bars_title = t(uid, "card_bars_months")
+
+    cur, _ = streaks(uid)
+    return {
+        "title": title,
+        "subtitle": subtitle,
+        "stats": [
+            (str(len(done)), t(uid, "card_s_books")),
+            (fmt_num(pages), t(uid, "card_s_pages")),
+            third,
+            (str(cur), t(uid, "card_s_streak")),
+        ],
+        "fav_title": t(uid, "card_fav"),
+        "fav": [(b["title"], b["rating"]) for b in fav],
+        "bars_title": bars_title,
+        "bars": bars,
+        "footer": t(uid, "card_footer", bot=BOT_USERNAME),
+    }
+
+
+def render_card(data: dict) -> bytes | None:
+    """Рисует картинку 1080x1350 (для сторис и постов). None, если нет Pillow или шрифта."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont, ImageOps
+    except ImportError:
+        return None
+    bold = find_font(FONT_BOLD)
+    reg = find_font(FONT_REG) or bold
+    if not bold:
+        return None
+    W, H = 1080, 1350
+    gold, soft = (255, 214, 102), (214, 205, 242)
+    base = ImageOps.colorize(
+        Image.linear_gradient("L").resize((W, H)), black=(27, 31, 77), white=(102, 52, 120)
+    ).convert("RGBA")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    panels = [
+        (60, 250, 530, 470), (550, 250, 1020, 470), (60, 490, 530, 710), (550, 490, 1020, 710),
+        (60, 740, 1020, 1010), (60, 1040, 1020, 1255),
+    ]
+    for box in panels:
+        od.rounded_rectangle(box, radius=36, fill=(255, 255, 255, 38))
+    img = Image.alpha_composite(base, overlay)
+    d = ImageDraw.Draw(img)
+
+    def font(path, size):
+        return ImageFont.truetype(path, size)
+
+    def fitted(text, path, size, max_w, min_size=20):
+        while size > min_size and d.textlength(text, font=font(path, size)) > max_w:
+            size -= 2
+        return font(path, size)
+
+    def ellipsize(text, f, max_w):
+        if d.textlength(text, font=f) <= max_w:
+            return text
+        while text and d.textlength(text + "…", font=f) > max_w:
+            text = text[:-1]
+        return text.rstrip() + "…"
+
+    d.text((W // 2, 120), data["title"], font=fitted(data["title"], bold, 70, 940), fill="white", anchor="mm")
+    d.text((W // 2, 195), data["subtitle"], font=font(reg, 38), fill=soft, anchor="mm")
+    for box, (value, label) in zip(panels[:4], data["stats"]):
+        cx = (box[0] + box[2]) // 2
+        d.text((cx, box[1] + 95), value, font=fitted(value, bold, 104, 420), fill=gold, anchor="mm")
+        d.text((cx, box[1] + 172), label, font=fitted(label, reg, 34, 420, 22), fill="white", anchor="mm")
+
+    d.text((100, 782), data["fav_title"], font=font(bold, 38), fill=gold, anchor="lm")
+    f36 = font(reg, 36)
+    if not data["fav"]:
+        d.text((100, 860), "—", font=f36, fill="white", anchor="lm")
+    for i, (title, rating) in enumerate(data["fav"]):
+        y = 850 + i * 60
+        d.text((100, y), ellipsize(f"{i + 1}. {title}", f36, 740), font=f36, fill="white", anchor="lm")
+        if rating:
+            d.text((980, y), f"★ {rating}", font=font(bold, 36), fill=gold, anchor="rm")
+
+    d.text((100, 1073), data["bars_title"], font=font(bold, 30), fill=gold, anchor="lm")
+    bars, n = data["bars"], len(data["bars"])
+    x0, x1, top_y, base_y = 100, 980, 1115, 1215
+    gap = 6 if n > 14 else 10
+    bw = (x1 - x0 - gap * (n - 1)) / n
+    top_val = max([v for _, v in bars] + [1])
+    for i, (label, v) in enumerate(bars):
+        x = x0 + i * (bw + gap)
+        h = max(6, round((base_y - top_y) * v / top_val)) if v else 4
+        d.rounded_rectangle(
+            (x, base_y - h, x + bw, base_y), radius=min(8, bw / 2, h / 2),
+            fill=gold if v else (160, 150, 195),
+        )
+        if label:
+            d.text((x + bw / 2, 1237), label, font=font(reg, 22), fill=soft, anchor="mm")
+    d.text((W // 2, 1300), data["footer"], font=font(reg, 34), fill=soft, anchor="mm")
+
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=92)
+    return buf.getvalue()
+
+
+def card_kb(uid: int):
+    kb = InlineKeyboardBuilder()
+    for p in ("month", "year", "all"):
+        kb.button(text=t(uid, f"card_btn_{p}"), callback_data=f"card:{p}")
+    kb.adjust(3)
+    return kb.as_markup()
+
+
+async def send_share_card(bot: Bot, chat_id: int, uid: int, period: str) -> None:
+    data = card_data(uid, period)
+    if not data:
+        await bot.send_message(chat_id, t(uid, "card_empty"))
+        return
+    try:
+        jpg = await asyncio.to_thread(render_card, data)
+    except Exception:
+        logging.exception("card render failed")
+        jpg = None
+    if not jpg:
+        lines = [t(uid, "card_nofont"), "", f"<b>{escape(data['title'])}</b> · {escape(data['subtitle'])}"]
+        lines += [f"{escape(lbl)}: {escape(v)}" for v, lbl in data["stats"]]
+        await bot.send_message(chat_id, "\n".join(lines))
+        return
+    link = f"https://t.me/{BOT_USERNAME}?start=card"
+    await bot.send_photo(
+        chat_id, BufferedInputFile(jpg, filename="tomik-card.jpg"), caption=t(uid, "card_caption", link=link)
+    )
+
+
+@pr.message(Command("card"))
+async def card_cmd(m: Message, command: CommandObject):
+    uid = m.from_user.id
+    arg = (command.args or "").strip().lower()
+    if arg in ("month", "year", "all"):
+        await send_share_card(m.bot, m.chat.id, uid, arg)
+        return
+    await m.answer(t(uid, "card_pick"), reply_markup=card_kb(uid))
+
+
+@pr.callback_query(F.data.startswith("card:"))
+async def cb_card(c: CallbackQuery):
+    period = c.data.split(":")[1]
+    await c.answer()
+    if period in ("month", "year", "all"):
+        await send_share_card(c.bot, c.message.chat.id, c.from_user.id, period)
+
+
+# ======================================================================
 #   АДМИН: /id, /users, /backup, ежедневная копия базы, уведомления об ошибках
 # ======================================================================
 def is_owner(uid: int) -> bool:
@@ -2876,7 +3194,7 @@ async def backup_cmd(m: Message):
 
 async def set_admin_commands(bot: Bot) -> None:
     cmds = [BotCommand(command=c, description=tl("ru", f"cmd_{c}")) for c in (
-        "shelf", "timer", "recs", "stats", "week", "goal", "remind", "add", "import", "read", "export", "lang", "cancel"
+        "shelf", "timer", "recs", "stats", "badges", "card", "week", "goal", "remind", "add", "import", "read", "export", "lang", "cancel"
     )]
     cmds += [
         BotCommand(command="users", description="Статистика бота"),
@@ -2982,7 +3300,7 @@ async def reminder_loop(bot: Bot) -> None:
 
 async def set_commands(bot: Bot) -> None:
     private = [
-        "shelf", "timer", "recs", "stats", "week", "goal", "remind",
+        "shelf", "timer", "recs", "stats", "badges", "card", "week", "goal", "remind",
         "add", "import", "read", "export", "lang", "cancel",
     ]
     groups = ["join", "leave", "top", "read", "challenge", "weekly", "digest", "lang"]

@@ -9,6 +9,7 @@ RU = {
         "/timer — таймер чтения\n"
         "/recs — что почитать дальше\n"
         "/stats — статистика\n"
+        "/badges — значки, /card — картинка с итогами\n"
         "/week — итоги недели\n"
         "/goal — цель на месяц\n"
         "/remind — напоминание почитать\n"
@@ -17,7 +18,9 @@ RU = {
         "/import — импорт из Goodreads / Livelib (CSV)\n"
         "/export — заметки и цитаты\n"
         "/lang — язык\n\n"
-        "👥 Добавь меня в группу с друзьями: рейтинг чтения, итоги дня и недели, общий челлендж."
+        "👥 Добавь меня в группу с друзьями: рейтинг чтения, итоги дня и недели, общий челлендж.\n\n"
+        "📢 Наш новостной канал: @tomik_tg\n"
+        "🛠 Бот сделан: @fyave"
     ),
     "cancelled": "Ок, отменил.",
     "not_found": "Не нашёл эту книгу.",
@@ -290,6 +293,45 @@ RU = {
     "cmd_import": "Импорт из CSV",
     "cmd_challenge": "Челлендж группы",
     "cmd_weekly": "Итоги недели в группе",
+    # --- значки ---
+    "bd_head": "🏅 <b>Твои значки</b> ({got}/{total})",
+    "bd_next": " → дальше {n} (сейчас {cur})",
+    "bd_max": " ✨ максимум",
+    "bd_new": "🏅 <b>Новые значки!</b>\n{names}",
+    "bd_hint": "Значки выдаются сами: читай, записывай страницы, пользуйся таймером и заметками.",
+    "bdl_books": "📚 Книги",
+    "bdl_pages": "📄 Страницы",
+    "bdl_streak": "🔥 Серия дней",
+    "bdl_hours": "⏱ Часы чтения",
+    "bdl_notes": "📝 Заметки",
+    "bdl_genres": "🎭 Жанры",
+    # --- картинка с итогами ---
+    "card_pick": "📊 За какой период сделать картинку с итогами?",
+    "card_btn_month": "Месяц",
+    "card_btn_year": "Год",
+    "card_btn_all": "Всё время",
+    "card_title_month": "Мой месяц в книгах",
+    "card_title_year": "Мой {y} год в книгах",
+    "card_title_all": "Моя читательская история",
+    "card_sub_all": "за всё время",
+    "card_s_books": "Прочитано книг",
+    "card_s_pages": "Страниц",
+    "card_s_hours": "Время чтения",
+    "card_s_rating": "Средняя оценка",
+    "card_s_streak": "Серия, дней",
+    "card_h": "ч",
+    "card_m": "мин",
+    "card_fav": "Любимые книги",
+    "card_bars_days": "Страницы по дням",
+    "card_bars_months": "Книги по месяцам",
+    "card_footer": "Томик · @{bot}",
+    "card_caption": "📊 Мои итоги в Томике. Попробуй и ты: {link}",
+    "card_empty": "За этот период пока нечем делиться: прочитай и отметь хотя бы одну книгу или запиши страницы.",
+    "card_nofont": "Не нашёл шрифт для картинки, вот итоги текстом:",
+    "months_short": "янв фев мар апр май июн июл авг сен окт ноя дек",
+    "months_full": "январь февраль март апрель май июнь июль август сентябрь октябрь ноябрь декабрь",
+    "cmd_badges": "Мои значки",
+    "cmd_card": "Картинка с итогами",
 }
 
 EN = {
@@ -301,6 +343,7 @@ EN = {
         "/timer: reading timer\n"
         "/recs: what to read next\n"
         "/stats: statistics\n"
+        "/badges: badges, /card: summary picture\n"
         "/week: weekly recap\n"
         "/goal: monthly goal\n"
         "/remind: reading reminder\n"
@@ -309,7 +352,9 @@ EN = {
         "/import: import from Goodreads / Livelib (CSV)\n"
         "/export: notes and quotes\n"
         "/lang: language\n\n"
-        "👥 Add me to a group with friends: reading leaderboard, daily and weekly summaries, shared challenge."
+        "👥 Add me to a group with friends: reading leaderboard, daily and weekly summaries, shared challenge.\n\n"
+        "📢 Our news channel: @tomik_tg\n"
+        "🛠 Made by: @fyave"
     ),
     "cancelled": "Okay, cancelled.",
     "not_found": "Couldn't find that book.",
@@ -582,6 +627,45 @@ EN = {
     "cmd_import": "Import from CSV",
     "cmd_challenge": "Group challenge",
     "cmd_weekly": "Weekly group summary",
+    # --- badges ---
+    "bd_head": "🏅 <b>Your badges</b> ({got}/{total})",
+    "bd_next": " → next {n} (now {cur})",
+    "bd_max": " ✨ max",
+    "bd_new": "🏅 <b>New badges!</b>\n{names}",
+    "bd_hint": "Badges are awarded automatically: read, log pages, use the timer and notes.",
+    "bdl_books": "📚 Books",
+    "bdl_pages": "📄 Pages",
+    "bdl_streak": "🔥 Day streak",
+    "bdl_hours": "⏱ Reading hours",
+    "bdl_notes": "📝 Notes",
+    "bdl_genres": "🎭 Genres",
+    # --- share card ---
+    "card_pick": "📊 Which period should the summary picture cover?",
+    "card_btn_month": "Month",
+    "card_btn_year": "Year",
+    "card_btn_all": "All time",
+    "card_title_month": "My month in books",
+    "card_title_year": "My {y} in books",
+    "card_title_all": "My reading story",
+    "card_sub_all": "all time",
+    "card_s_books": "Books finished",
+    "card_s_pages": "Pages",
+    "card_s_hours": "Reading time",
+    "card_s_rating": "Average rating",
+    "card_s_streak": "Day streak",
+    "card_h": "h",
+    "card_m": "min",
+    "card_fav": "Favorite books",
+    "card_bars_days": "Pages per day",
+    "card_bars_months": "Books per month",
+    "card_footer": "Tomik · @{bot}",
+    "card_caption": "📊 My reading summary from Tomik. Try it yourself: {link}",
+    "card_empty": "Nothing to share for this period yet: finish and mark a book or log some pages.",
+    "card_nofont": "Couldn't find a font for the picture, here's the summary as text:",
+    "months_short": "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec",
+    "months_full": "January February March April May June July August September October November December",
+    "cmd_badges": "My badges",
+    "cmd_card": "Summary picture",
 }
 
 TEXTS = {"ru": RU, "en": EN}
