@@ -84,6 +84,8 @@ UNKNOWN_AUTHORS = {"", "—", "Автор неизвестен", "Unknown author
 BOT_USERNAME = ""  # заполняется при старте
 BOT_REF = None  # объект бота для фоновых уведомлений
 
+VERSION = "1.3.0"  # версия бота
+
 # ---------- БД ----------
 def init_db():
     """Инициализация БД с проверкой целостности."""
@@ -1224,6 +1226,7 @@ async def send_start(bot: Bot, chat_id: int, uid: int) -> None:
     """Приветствие: картинка с подписью (если файл найден), иначе просто текст."""
     global _START_FILE_ID, _START_PREPARED
     text = t(uid, "start")
+    text += f"\n\n💾 <b>Версия:</b> {VERSION}"
     photo = _START_FILE_ID
     if not photo and os.path.isfile(START_PHOTO):
         if _START_PREPARED is None:
@@ -1263,6 +1266,12 @@ async def start(m: Message, command: CommandObject):
 async def shelf_cmd(m: Message):
     text, kb = shelf_view(m.from_user.id)
     await m.answer(text, reply_markup=kb)
+
+
+@pr.message(Command("version"))
+async def version_cmd(m: Message):
+    """Показать версию бота."""
+    await m.answer(f"📦 <b>Томик</b> v{VERSION}\n\nПоследнее обновление: челленджи, отзывы, тренды, ВАУ-эффекты 🎨")
 
 
 @pr.message(Command("stats"))
@@ -4673,7 +4682,7 @@ async def set_commands(bot: Bot) -> None:
     private = [
         "shelf", "stats", "level", "profile", "badges", "card",
         "timer", "read", "goal", "challenge", "week", "heatmap", "insights",
-        "shelf_image", "year",
+        "shelf_image", "year", "version",
         "recs", "add", "import", "export", "remind", "lang", "cancel",
     ]
     groups = [

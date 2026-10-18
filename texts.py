@@ -292,6 +292,7 @@ RU = {
     "cmd_resetinfo": "Инфо о сбросе топа",
     "cmd_shelf_image": "Картинка полки (для соцсетей)",
     "cmd_year": "Год в книгах (инфографика)",
+    "cmd_version": "Версия бота",
 
     # --- импорт ---
     "import_help": (
@@ -700,6 +701,7 @@ EN = {
     "cmd_resetinfo": "Leaderboard reset info",
     "cmd_shelf_image": "Shelf image (for social media)",
     "cmd_year": "Year in books (infographic)",
+    "cmd_version": "Bot version",
 
     # --- import ---
     "import_help": (
