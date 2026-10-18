@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import calendar
 import csv
@@ -83,8 +85,25 @@ BOT_USERNAME = ""  # заполняется при старте
 BOT_REF = None  # объект бота для фоновых уведомлений
 
 # ---------- БД ----------
-db = sqlite3.connect("tomik.db", check_same_thread=False)
-db.row_factory = sqlite3.Row
+def init_db():
+    """Инициализация БД с проверкой целостности."""
+    db = sqlite3.connect("tomik.db", check_same_thread=False)
+    db.row_factory = sqlite3.Row
+
+    # Проверка целостности БД
+    try:
+        db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='books'").fetchone()
+    except sqlite3.DatabaseError:
+        logging.warning("Database corrupted, recreating...")
+        db.close()
+        os.remove("tomik.db")
+        db = sqlite3.connect("tomik.db", check_same_thread=False)
+        db.row_factory = sqlite3.Row
+
+    return db
+
+
+db = init_db()
 db.executescript(
     """
     CREATE TABLE IF NOT EXISTS books (
@@ -181,6 +200,35 @@ db.executescript(
         avg_daily_pages REAL,
         last_computed TEXT
     );
+    CREATE TABLE IF NOT EXISTS challenges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        target INTEGER NOT NULL,
+        current INTEGER DEFAULT 0,
+        started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        deadline TEXT,
+        completed INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS book_ratings (
+        book_id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        rating INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 5),
+        review TEXT,
+        rated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS reading_streaks (
+        user_id INTEGER PRIMARY KEY,
+        current_streak INTEGER DEFAULT 0,
+        longest_streak INTEGER DEFAULT 0,
+        last_read_date TEXT
+    );
+    CREATE TABLE IF NOT EXISTS group_resets (
+        chat_id INTEGER PRIMARY KEY,
+        reset_date TEXT,
+        reset_by INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
     """
 )
 
@@ -197,6 +245,10 @@ add_cols(
     [
         ("pages", "INTEGER"),
         ("cover", "TEXT"),
+        ("rating", "INTEGER"),
+        ("review", "TEXT"),
+        ("started_date", "TEXT"),
+        ("finished_date", "TEXT"),
         ("page", "INTEGER DEFAULT 0"),
         ("started_at", "TEXT"),
         ("finished_at", "TEXT"),
@@ -235,6 +287,42 @@ add_cols(
     ],
 )
 db.commit()
+
+
+def db_exec(query: str, params: tuple = ()) -> sqlite3.Cursor:
+    """Безопасное выполнение запроса с автоматическим восстановлением БД."""
+    global db
+    try:
+        return db.execute(query, params)
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            logging.warning("Table missing, reinitializing database...")
+            db = init_db()
+            return db.execute(query, params)
+        raise
+    except sqlite3.DatabaseError:
+        logging.exception("Database error, reconnecting...")
+        try:
+            db.close()
+        except Exception:
+            pass
+        db = init_db()
+        return db.execute(query, params)
+
+
+def db_commit() -> None:
+    """Безопасный коммит с автоматическим восстановлением."""
+    global db
+    try:
+        db.commit()
+    except sqlite3.DatabaseError:
+        logging.exception("Commit failed, reconnecting...")
+        try:
+            db.close()
+        except Exception:
+            pass
+        db = init_db()
+
 
 # ---------- Состояние в памяти ----------
 SEARCH: dict[int, list[dict]] = {}  # результаты последнего поиска
@@ -771,6 +859,8 @@ def book_text(b) -> str:
     if n_notes:
         lines.append(t(uid, "card_notes", n=n_notes))
     lines.append(t(uid, "card_rating", r=stars))
+    if b.get("review"):
+        lines.append(f"\n💭 <i>{escape(b['review'][:200])}</i>")
     return "\n".join(lines)
 
 
@@ -785,6 +875,8 @@ def book_kb(b):
     kb.row(btn(t(uid, "b_notes"), f"notes:{bid}"), btn(t(uid, "b_tags"), f"tags:{bid}"))
     kb.row(btn(t(uid, "b_edit"), f"edit:{bid}"), btn(t(uid, "b_delete"), f"del:{bid}"))
     kb.row(*[btn(str(n), f"rate:{bid}:{n}") for n in range(1, 6)])
+    if b["rating"]:
+        kb.row(btn(t(uid, "b_review"), f"review:{bid}"))
     kb.row(btn(t(uid, "b_back"), "shelf:all:0"))
     return kb.as_markup()
 
@@ -1033,12 +1125,24 @@ def stats_text(uid: int) -> str:
     if per_month:
         out.append("")
         out.append(t(uid, "st_months"))
+        values = []
         for j in range(5, -1, -1):
             y, m = today.year, today.month - j
             while m <= 0:
                 m, y = m + 12, y - 1
             c = per_month.get(f"{y}-{m:02d}", 0)
+            values.append(c)
             out.append(f"{m:02d}.{str(y)[2:]} {'▓' * min(c, 12) or '·'} {c}")
+
+        # Добавляем тренд
+        if len(values) >= 2:
+            recent_avg = sum(values[-3:]) / 3 if len(values) >= 3 else values[-1]
+            old_avg = sum(values[:3]) / 3 if len(values) >= 3 else values[0]
+            if recent_avg > old_avg * 1.2:
+                out.append(f"\n📈 {t(uid, 'trend_up')}")
+            elif recent_avg < old_avg * 0.8:
+                out.append(f"\n📉 {t(uid, 'trend_down')}")
+
     return "\n".join(out)
 
 
@@ -1238,6 +1342,69 @@ async def cb_goal(c: CallbackQuery):
     elif val.isdigit():
         set_goal(uid, int(val))
         await c.message.edit_text(t(uid, "goal_set", n=int(val)) + "\n\n" + goal_status(uid))
+    await c.answer()
+
+
+# ---------- Челленджи ----------
+@pr.message(Command("challenge"))
+async def challenge_cmd(m: Message):
+    """Показать активные челленджи и создать новый."""
+    uid = m.from_user.id
+    active = get_active_challenges(uid)
+
+    text_parts = [t(uid, "challenge_head")]
+
+    if active:
+        text_parts.append("")
+        for ch in active:
+            progress_pct = (ch["progress"] / ch["target"]) * 100 if ch["target"] > 0 else 0
+            progress_bar = "▓" * int(progress_pct / 10) + "░" * (10 - int(progress_pct / 10))
+            text_parts.append(
+                f"🎯 <b>{escape(ch['title'])}</b>\n"
+                f"📊 {progress_bar} {ch['progress']}/{ch['target']}\n"
+                f"📅 {t(uid, 'challenge_until', date=ch['end_date'])}"
+            )
+    else:
+        text_parts.append(t(uid, "challenge_none"))
+
+    text_parts.append("")
+    text_parts.append(t(uid, "challenge_hint"))
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text=t(uid, "challenge_create"), callback_data="challenge:new")
+
+    await m.answer("\n".join(text_parts), reply_markup=kb.as_markup())
+
+
+@pr.callback_query(F.data == "challenge:new")
+async def cb_challenge_new(c: CallbackQuery):
+    """Создание нового челленджа."""
+    uid = c.from_user.id
+    kb = InlineKeyboardBuilder()
+    kb.button(text=t(uid, "challenge_month_5"), callback_data="challenge:create:5:30")
+    kb.button(text=t(uid, "challenge_month_10"), callback_data="challenge:create:10:30")
+    kb.button(text=t(uid, "challenge_year_50"), callback_data="challenge:create:50:365")
+    kb.button(text=t(uid, "challenge_year_100"), callback_data="challenge:create:100:365")
+    kb.adjust(2, 2)
+    await c.message.edit_text(t(uid, "challenge_select"), reply_markup=kb.as_markup())
+    await c.answer()
+
+
+@pr.callback_query(F.data.startswith("challenge:create:"))
+async def cb_challenge_create(c: CallbackQuery):
+    """Создание челленджа с параметрами."""
+    uid = c.from_user.id
+    _, _, target, days = c.data.split(":")
+    target, days = int(target), int(days)
+
+    title = t(uid, "challenge_default_title", n=target, d=days)
+    end_date = (now_local().date() + timedelta(days=days)).isoformat()
+
+    create_challenge(uid, title, target, end_date)
+
+    await c.message.edit_text(
+        t(uid, "challenge_created", title=title, target=target, days=days)
+    )
     await c.answer()
 
 
@@ -1462,6 +1629,9 @@ async def on_text(m: Message):
         elif kind in ("quote", "note"):
             await handle_note(m)
             return
+        elif kind == "review":
+            await handle_review(m)
+            return
         elif kind == "tag":
             await handle_tag_input(m)
             return
@@ -1601,6 +1771,22 @@ async def cb_rate(c: CallbackQuery):
     if b:
         await update_card(c, b)
     await c.answer(t(uid, "rating_saved"))
+    check_badges(uid)
+
+
+@pr.callback_query(F.data.startswith("review:"))
+async def cb_review(c: CallbackQuery):
+    """Запрашиваем отзыв о книге."""
+    uid = c.from_user.id
+    book_id = int(c.data.split(":")[1])
+    b = get_book(book_id, uid)
+    if not b:
+        await c.answer(t(uid, "not_found"), show_alert=True)
+        return
+    MANUAL.pop(uid, None)
+    PENDING[uid] = ("review", book_id)
+    await c.message.answer(t(uid, "review_prompt", title=escape(b["title"])))
+    await c.answer()
 
 
 @pr.callback_query(F.data.startswith("prog:"))
@@ -1719,6 +1905,24 @@ async def handle_note(m: Message) -> None:
     view, kb = notes_view(book_id, uid)
     await m.answer(t(uid, "saved") + "\n\n" + view, reply_markup=kb)
     await announce_badges(m.bot, uid, m.chat.id)
+
+
+async def handle_review(m: Message) -> None:
+    """Обрабатываем отзыв о книге."""
+    uid = m.from_user.id
+    _, book_id = PENDING.pop(uid)
+    b = get_book(book_id, uid)
+    if not b:
+        await m.answer(t(uid, "not_found"))
+        return
+    review_text = m.text.strip()[:2000]
+    db.execute(
+        "UPDATE books SET review=? WHERE id=? AND user_id=?",
+        (review_text, book_id, uid)
+    )
+    db.commit()
+    await send_card(m.bot, m.chat.id, b, t(uid, "review_saved"))
+    check_badges(uid)
 
 
 @pr.callback_query(F.data.startswith("notes:"))
@@ -2668,6 +2872,16 @@ def board_range(chat_id: int, start: str, end: str) -> list[dict]:
 
 def board(chat_id: int, period: str) -> list[dict]:
     start, end = period_range(period)
+
+    # Учитываем дату последнего сброса топа
+    reset = db.execute(
+        "SELECT reset_date FROM group_resets WHERE chat_id=?", (chat_id,)
+    ).fetchone()
+    if reset and reset["reset_date"]:
+        # Если сброс был после начала периода, начинаем отсчёт с даты сброса
+        if reset["reset_date"] > start:
+            start = reset["reset_date"]
+
     return board_range(chat_id, start, end)
 
 
@@ -2827,6 +3041,44 @@ async def g_digest(m: Message, command: CommandObject):
     )
     db.commit()
     await m.answer(tl(lang, "g_digest_set", t=tm))
+
+
+@gr.message(Command("reset"))
+async def g_reset_top(m: Message):
+    """Сброс топа группы (только для админов)."""
+    if not await is_admin(m.bot, m.chat.id, m.from_user.id):
+        await m.answer(tl(group_lang(m.chat.id), "g_admin_only"))
+        return
+
+    lang = group_lang(m.chat.id)
+    today = today_str()
+
+    # Сохраняем дату сброса
+    db.execute(
+        "INSERT OR REPLACE INTO group_resets (chat_id, reset_date, reset_by) VALUES (?,?,?)",
+        (m.chat.id, today, m.from_user.id),
+    )
+    db.commit()
+
+    await m.answer(tl(lang, "g_reset_done"))
+
+
+@gr.message(Command("resetinfo"))
+async def g_reset_info(m: Message):
+    """Информация о последнем сбросе топа."""
+    r = db.execute(
+        "SELECT reset_date, reset_by FROM group_resets WHERE chat_id=?",
+        (m.chat.id,),
+    ).fetchone()
+
+    if not r:
+        await m.answer(tl(group_lang(m.chat.id), "g_reset_none"))
+        return
+
+    user_name_str = user_name(r["reset_by"]) if r["reset_by"] else "?"
+    await m.answer(
+        tl(group_lang(m.chat.id), "g_reset_info", date=r["reset_date"], user=user_name_str)
+    )
 
 
 @gr.message(Command("lang"))
@@ -3299,6 +3551,9 @@ BADGE_FAMILIES = {
     "hours": (1, 10, 50, 100, 500, 1000),
     "notes": (1, 10, 50, 100, 500),
     "genres": (3, 5, 10, 15, 20),
+    "reviews": (1, 5, 10, 25, 50, 100),
+    "challenges": (1, 3, 5, 10, 25),
+    "ratings": (5, 10, 25, 50, 100),
 }
 TIER_ICONS = ["🥉", "🥈", "🥇", "🏆", "💎", "👑", "⭐", "🌟"]
 
@@ -3312,6 +3567,9 @@ def badge_metrics(uid: int) -> dict[str, int]:
         "hours": minutes_between(uid, "0000-01-01") // 60,
         "notes": one("SELECT COUNT(*) FROM notes WHERE user_id=?"),
         "genres": one("SELECT COUNT(DISTINCT genre) FROM books WHERE user_id=? AND genre IS NOT NULL"),
+        "reviews": one("SELECT COUNT(*) FROM books WHERE user_id=? AND review IS NOT NULL AND review != ''"),
+        "challenges": one("SELECT COUNT(*) FROM challenges WHERE user_id=? AND completed=1"),
+        "ratings": one("SELECT COUNT(*) FROM books WHERE user_id=? AND rating IS NOT NULL"),
     }
 
 
@@ -3362,6 +3620,136 @@ def badges_text(uid: int) -> str:
 @pr.message(Command("badges"))
 async def badges_cmd(m: Message):
     await m.answer(badges_text(m.from_user.id))
+
+
+# ---------- Челленджи ----------
+CHALLENGE_TYPES = {
+    "pages_month": {"name_ru": "Прочитать страниц за месяц", "name_en": "Read pages in a month", "icon": "📖"},
+    "books_month": {"name_ru": "Прочитать книг за месяц", "name_en": "Read books in a month", "icon": "📚"},
+    "streak_days": {"name_ru": "Читать дней подряд", "name_en": "Read days in a row", "icon": "🔥"},
+    "hours_month": {"name_ru": "Часов чтения за месяц", "name_en": "Reading hours in a month", "icon": "⏱"},
+    "genres": {"name_ru": "Изучить жанров", "name_en": "Explore genres", "icon": "🎭"},
+}
+
+
+def create_challenge(uid: int, ctype: str, target: int, days: int = 30) -> int:
+    """Создаёт челлендж. Возвращает ID."""
+    deadline = (datetime.now(TZ) + timedelta(days=days)).strftime("%Y-%m-%d")
+    cur = db.execute(
+        "INSERT INTO challenges (user_id, type, target, deadline) VALUES (?,?,?,?)",
+        (uid, ctype, target, deadline),
+    )
+    db.commit()
+    return cur.lastrowid
+
+
+def check_challenge_progress(uid: int) -> None:
+    """Обновляет прогресс активных челленджей."""
+    challenges = db.execute(
+        "SELECT id, type, target, current FROM challenges WHERE user_id=? AND completed=0",
+        (uid,)
+    ).fetchall()
+
+    for ch in challenges:
+        cid, ctype, target, current = ch["id"], ch["type"], ch["target"], ch["current"]
+        new_current = 0
+
+        if ctype == "pages_month":
+            new_current = pages_between(uid, (datetime.now(TZ) - timedelta(days=30)).strftime("%Y-%m-%d"))
+        elif ctype == "books_month":
+            new_current = db.execute(
+                "SELECT COUNT(*) FROM books WHERE user_id=? AND status='done' AND finished_at >= date('now', '-30 days')",
+                (uid,)
+            ).fetchone()[0]
+        elif ctype == "streak_days":
+            new_current = streaks(uid)[0]
+        elif ctype == "hours_month":
+            new_current = minutes_between(uid, (datetime.now(TZ) - timedelta(days=30)).strftime("%Y-%m-%d")) // 60
+        elif ctype == "genres":
+            new_current = db.execute(
+                "SELECT COUNT(DISTINCT genre) FROM books WHERE user_id=? AND genre IS NOT NULL",
+                (uid,)
+            ).fetchone()[0]
+
+        if new_current != current:
+            completed = 1 if new_current >= target else 0
+            db.execute(
+                "UPDATE challenges SET current=?, completed=? WHERE id=?",
+                (new_current, completed, cid)
+            )
+
+    db.commit()
+
+
+def challenges_text(uid: int) -> str:
+    """Текст активных челленджей."""
+    check_challenge_progress(uid)
+    active = db.execute(
+        "SELECT type, target, current, deadline, completed FROM challenges WHERE user_id=? ORDER BY completed, deadline",
+        (uid,)
+    ).fetchall()
+
+    if not active:
+        return t(uid, "chl_empty")
+
+    lines = [t(uid, "chl_head"), ""]
+    for ch in active:
+        ctype, target, current, deadline, completed = ch["type"], ch["target"], ch["current"], ch["deadline"], ch["completed"]
+        info = CHALLENGE_TYPES.get(ctype, {})
+        icon = info.get("icon", "🎯")
+        name = info.get(f"name_{lang_of(uid)}", ctype)
+
+        if completed:
+            status = "✅"
+            progress = t(uid, "chl_done")
+        else:
+            pct = min(100, int(current / target * 100)) if target else 0
+            bar_len = 10
+            filled = int(bar_len * pct / 100)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            progress = f"{current}/{target} {bar} {pct}%"
+            days_left = (datetime.fromisoformat(deadline) - datetime.now(TZ)).days
+            status = f"⏳ {days_left}д"
+
+        lines.append(f"{icon} {name}\n{progress} {status}\n")
+
+    return "\n".join(lines)
+
+
+@pr.message(Command("challenges"))
+async def challenges_cmd(m: Message):
+    """Показывает активные челленджи."""
+    await m.answer(challenges_text(m.from_user.id))
+
+
+@pr.message(Command("newchallenge"))
+async def new_challenge_cmd(m: Message, cmd: CommandObject):
+    """Создаёт новый челлендж. Формат: /newchallenge <тип> <цель> [дни]"""
+    uid = m.from_user.id
+    args = (cmd.args or "").strip().split()
+
+    if len(args) < 2:
+        types_list = "\n".join(
+            f"• {k}: {v.get(f'name_{lang_of(uid)}', k)}"
+            for k, v in CHALLENGE_TYPES.items()
+        )
+        await m.answer(t(uid, "chl_usage", types=types_list))
+        return
+
+    ctype, target = args[0], int(args[1])
+    days = int(args[2]) if len(args) > 2 else 30
+
+    if ctype not in CHALLENGE_TYPES:
+        await m.answer(t(uid, "chl_invalid_type"))
+        return
+
+    if target <= 0 or days <= 0:
+        await m.answer(t(uid, "chl_invalid_params"))
+        return
+
+    create_challenge(uid, ctype, target, days)
+    await m.answer(t(uid, "chl_created"))
+    check_badges(uid)
 
 
 # ======================================================================
@@ -3787,6 +4175,257 @@ async def cb_card(c: CallbackQuery):
 
 
 # ======================================================================
+#                    📱 ВАУ: КРАСИВАЯ КАРТИНКА ПОЛКИ
+# ======================================================================
+def create_shelf_image(uid: int) -> bytes | None:
+    """Создаёт красивую картинку полки для соцсетей (Instagram-ready)."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+
+    # Получаем данные
+    books = db.execute(
+        "SELECT * FROM books WHERE user_id=? ORDER BY id DESC LIMIT 20",
+        (uid,),
+    ).fetchall()
+
+    if not books:
+        return None
+
+    # Статистика
+    total_books = db.execute("SELECT COUNT(*) c FROM books WHERE user_id=?", (uid,)).fetchone()["c"]
+    done_books = db.execute(
+        "SELECT COUNT(*) c FROM books WHERE user_id=? AND status='done'", (uid,)
+    ).fetchone()["c"]
+    total_pages = pages_between(uid, "0000-01-01")
+
+    # Создаём изображение (Instagram Story формат: 1080x1920)
+    W, H = 1080, 1920
+    img = Image.new("RGB", (W, H), color="#1a1a2e")
+    draw = ImageDraw.Draw(img)
+
+    # Цвета и шрифты
+    bg_color = "#1a1a2e"
+    accent = "#e94560"
+    text_color = "#eaeaea"
+    dim_color = "#8b8b8b"
+
+    try:
+        # Пробуем системные шрифты
+        if os.name == 'nt':  # Windows
+            font_large = ImageFont.truetype("arialbd.ttf", 80)
+            font_title = ImageFont.truetype("arialbd.ttf", 50)
+            font_text = ImageFont.truetype("arial.ttf", 40)
+            font_small = ImageFont.truetype("arial.ttf", 30)
+        else:  # Linux/Mac
+            font_large = ImageFont.truetype("DejaVuSans-Bold.ttf", 80)
+            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 50)
+            font_text = ImageFont.truetype("DejaVuSans.ttf", 40)
+            font_small = ImageFont.truetype("DejaVuSans.ttf", 30)
+    except Exception:
+        font_large = font_title = font_text = font_small = ImageFont.load_default()
+
+    y = 100
+
+    # Заголовок
+    draw.text((W//2, y), "📚 МОЯ ПОЛКА", fill=accent, font=font_large, anchor="mm")
+    y += 150
+
+    # Статистика
+    draw.text((W//2, y), f"📊 Всего книг: {total_books}", fill=text_color, font=font_title, anchor="mm")
+    y += 80
+    draw.text((W//2, y), f"✅ Прочитано: {done_books}", fill=text_color, font=font_title, anchor="mm")
+    y += 80
+    draw.text((W//2, y), f"📄 Страниц: {total_pages:,}".replace(",", " "), fill=text_color, font=font_title, anchor="mm")
+    y += 120
+
+    # Разделитель
+    draw.line((100, y, W-100, y), fill=accent, width=3)
+    y += 80
+
+    # Последние книги
+    draw.text((W//2, y), "📝 Последние книги:", fill=accent, font=font_title, anchor="mm")
+    y += 80
+
+    for i, book in enumerate(books[:10], 1):
+        title = book["title"][:40] + "..." if len(book["title"]) > 40 else book["title"]
+        status = {"want": "📌", "reading": "📖", "done": "✅", "dropped": "🚫"}.get(book["status"], "")
+
+        draw.text((100, y), f"{status} {title}", fill=text_color, font=font_text)
+        if book["author"]:
+            draw.text((100, y+50), f"   ✍️ {book['author'][:35]}", fill=dim_color, font=font_small)
+        y += 120
+
+    # Футер
+    y = H - 150
+    draw.text((W//2, y), f"Поделись своими книгами!", fill=accent, font=font_title, anchor="mm")
+    draw.text((W//2, y+80), f"@{BOT_USERNAME}", fill=dim_color, font=font_small, anchor="mm")
+
+    # Сохраняем в байты
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG', optimize=True)
+    img_byte_arr.seek(0)
+    return img_byte_arr.getvalue()
+
+
+@pr.message(Command("shelf_image"))
+async def shelf_image_cmd(m: Message):
+    """Создаёт красивую картинку полки для соцсетей."""
+    uid = m.from_user.id
+
+    await m.answer("🎨 Генерирую картинку...")
+
+    image_bytes = create_shelf_image(uid)
+    if not image_bytes:
+        await m.answer("😕 Не удалось создать картинку. Убедись, что у тебя есть книги на полке!")
+        return
+
+    photo_file = BufferedInputFile(image_bytes, filename="shelf.png")
+    await m.answer_photo(photo_file, caption="📸 Твоя книжная полка готова для соцсетей!")
+
+
+# ======================================================================
+#                    📚 ВАУ: ГОД В КНИГАХ
+# ======================================================================
+def create_year_book(uid: int) -> bytes | None:
+    """Создаёт красивую инфографику за год (как Spotify Wrapped)."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+
+    year_start = f"{datetime.now().year}-01-01"
+    year_end = f"{datetime.now().year}-12-31"
+
+    # Собираем статистику за год
+    books = db.execute(
+        "SELECT * FROM books WHERE user_id=? AND status='done' AND finished_at >= ? AND finished_at <= ?",
+        (uid, year_start, year_end),
+    ).fetchall()
+
+    if not books:
+        return None
+
+    # Статистика
+    total_books = len(books)
+    total_pages = sum(b["pages"] or 0 for b in books)
+    total_minutes = db.execute(
+        "SELECT SUM(minutes) m FROM sessions WHERE user_id=? AND started_ts >= ?",
+        (uid, int(datetime.fromisoformat(year_start).timestamp())),
+    ).fetchone()["m"] or 0
+    hours = total_minutes // 60
+
+    # Топ жанров
+    genres = {}
+    for b in books:
+        if b["genre"]:
+            genres[b["genre"]] = genres.get(b["genre"], 0) + 1
+    top_genres = sorted(genres.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # Топ авторов
+    authors = {}
+    for b in books:
+        author = b["author"] or "Неизвестен"
+        if author not in ("", "—", "Unknown author"):
+            authors[author] = authors.get(author, 0) + 1
+    top_authors = sorted(authors.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # Создаём изображение
+    W, H = 1080, 1920
+    img = Image.new("RGB", (W, H), color="#0f0f1e")
+    draw = ImageDraw.Draw(img)
+
+    accent = "#ffd700"
+    text_color = "#ffffff"
+    dim_color = "#a0a0a0"
+
+    try:
+        if os.name == 'nt':
+            font_huge = ImageFont.truetype("arialbd.ttf", 120)
+            font_large = ImageFont.truetype("arialbd.ttf", 70)
+            font_text = ImageFont.truetype("arial.ttf", 40)
+            font_small = ImageFont.truetype("arial.ttf", 32)
+        else:
+            font_huge = ImageFont.truetype("DejaVuSans-Bold.ttf", 120)
+            font_large = ImageFont.truetype("DejaVuSans-Bold.ttf", 70)
+            font_text = ImageFont.truetype("DejaVuSans.ttf", 40)
+            font_small = ImageFont.truetype("DejaVuSans.ttf", 32)
+    except Exception:
+        font_huge = font_large = font_text = font_small = ImageFont.load_default()
+
+    y = 120
+
+    # Заголовок
+    draw.text((W//2, y), f"📚 {datetime.now().year}", fill=accent, font=font_huge, anchor="mm")
+    draw.text((W//2, y+120), "ГОД В КНИГАХ", fill=text_color, font=font_large, anchor="mm")
+    y += 250
+
+    # Основная статистика
+    stats = [
+        ("📚", f"{total_books}", "книг"),
+        ("📄", f"{total_pages:,}".replace(",", " "), "страниц"),
+        ("⏱", f"{hours}", "часов"),
+    ]
+
+    x_positions = [W//4, W//2, 3*W//4]
+    for (icon, value, label), x in zip(stats, x_positions):
+        draw.text((x, y), f"{icon}", fill=accent, font=font_large, anchor="mm")
+        draw.text((x, y+100), value, fill=text_color, font=font_large, anchor="mm")
+        draw.text((x, y+160), label, fill=dim_color, font=font_small, anchor="mm")
+
+    y += 300
+
+    # Разделитель
+    draw.line((80, y, W-80, y), fill=accent, width=3)
+    y += 80
+
+    # Топ жанров
+    if top_genres:
+        draw.text((100, y), "🎭 Топ жанров:", fill=accent, font=font_large)
+        y += 100
+        for i, (genre, count) in enumerate(top_genres, 1):
+            draw.text((120, y), f"{i}. {genre}", fill=text_color, font=font_text)
+            draw.text((W-120, y), f"{count}", fill=dim_color, font=font_text, anchor="ra")
+            y += 80
+
+    # Топ авторов
+    if top_authors:
+        y += 40
+        draw.text((100, y), "✍️ Топ авторов:", fill=accent, font=font_large)
+        y += 100
+        for i, (author, count) in enumerate(top_authors, 1):
+            draw.text((120, y), f"{i}. {author[:30]}", fill=text_color, font=font_text)
+            draw.text((W-120, y), f"{count}", fill=dim_color, font=font_text, anchor="ra")
+            y += 80
+
+    # Футер
+    y = H - 120
+    draw.text((W//2, y), "Поделись своим годом в книгах!", fill=accent, font=font_text, anchor="mm")
+
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG', optimize=True)
+    img_byte_arr.seek(0)
+    return img_byte_arr.getvalue()
+
+
+@pr.message(Command("year"))
+async def year_book_cmd(m: Message):
+    """Создаёт инфографику года в книгах."""
+    uid = m.from_user.id
+
+    await m.answer("🎨 Генерирую твой год в книгах...")
+
+    image_bytes = create_year_book(uid)
+    if not image_bytes:
+        await m.answer("😕 Не удалось создать инфографику. Убедись, что у тебя есть прочитанные книги за этот год!")
+        return
+
+    photo_file = BufferedInputFile(image_bytes, filename="year.png")
+    await m.answer_photo(photo_file, caption="📚 Твой год в книгах готов!")
+
+
+# ======================================================================
 #   АДМИН: /id, /users, /backup, ежедневная копия базы, уведомления об ошибках
 # ======================================================================
 def is_owner(uid: int) -> bool:
@@ -3896,7 +4535,7 @@ async def backup_cmd(m: Message):
 
 async def set_admin_commands(bot: Bot) -> None:
     cmds = [BotCommand(command=c, description=tl("ru", f"cmd_{c}")) for c in (
-        "shelf", "timer", "recs", "stats", "badges", "card", "week", "goal", "remind", "add", "import", "read", "export", "lang", "cancel"
+        "shelf", "timer", "recs", "stats", "badges", "card", "week", "goal", "challenge", "remind", "add", "import", "read", "export", "lang", "cancel"
     )]
     cmds += [
         BotCommand(command="users", description="Статистика бота"),
@@ -3909,18 +4548,48 @@ async def set_admin_commands(bot: Bot) -> None:
 _last_error_ts = 0.0
 
 
+_last_error_ts = 0.0
+_error_count = 0
+
+
 @dp.errors()
 async def on_error(event: ErrorEvent):
-    """Любая необработанная ошибка в обработчиках: в лог и (не чаще раза в минуту) тебе в личку."""
-    global _last_error_ts
-    logging.error("handler error: %r", event.exception, exc_info=event.exception)
-    if ADMIN_ID and BOT_REF and time.time() - _last_error_ts > 60:
+    """Обработка ошибок с улучшенным логированием и защитой от спама."""
+    global _last_error_ts, _error_count
+
+    error_type = type(event.exception).__name__
+    error_msg = str(event.exception)
+
+    # Логируем с деталями
+    logging.error(
+        "Error in handler: %s: %s | Update: %s",
+        error_type,
+        error_msg,
+        event.update.model_dump_json()[:200] if hasattr(event.update, 'model_dump_json') else str(event.update)[:200],
+        exc_info=event.exception,
+    )
+
+    _error_count += 1
+
+    # Защита от спама: не отправляем больше 3 ошибок подряд
+    if _error_count > 3:
+        return True
+
+    # Уведомляем админа не чаще раза в 5 минут
+    if ADMIN_ID and BOT_REF and time.time() - _last_error_ts > 300:
         _last_error_ts = time.time()
+        _error_count = 0
+
         try:
-            msg = f"{type(event.exception).__name__}: {event.exception}"[:300]
-            await BOT_REF.send_message(ADMIN_ID, f"⚠️ <b>Ошибка в боте</b>\n<code>{escape(msg)}</code>")
+            await BOT_REF.send_message(
+                ADMIN_ID,
+                f"⚠️ <b>Ошибка в боте</b>\n"
+                f"🔴 <b>{error_type}</b>\n"
+                f"<code>{escape(error_msg[:200])}</code>",
+            )
         except Exception:
             pass
+
     return True
 
 
@@ -4003,12 +4672,14 @@ async def reminder_loop(bot: Bot) -> None:
 async def set_commands(bot: Bot) -> None:
     private = [
         "shelf", "stats", "level", "profile", "badges", "card",
-        "timer", "read", "goal", "week", "heatmap", "insights",
+        "timer", "read", "goal", "challenge", "week", "heatmap", "insights",
+        "shelf_image", "year",
         "recs", "add", "import", "export", "remind", "lang", "cancel",
     ]
     groups = [
         "join", "leave", "top", "read", "challenge", "weekly", "digest", "lang",
         "club_create", "club_join", "club_leave", "club_book", "club_info",
+        "reset", "resetinfo",
     ]
     for code in (None, "en"):
         lang = code or "ru"

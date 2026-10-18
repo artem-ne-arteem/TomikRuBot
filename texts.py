@@ -18,6 +18,7 @@ RU = {
         "⚙️ <b>Настройки:</b>\n"
         "/week — итоги недели\n"
         "/goal — цель на месяц\n"
+        "/challenge — челленджи на месяц/год\n"
         "/remind — напоминание почитать\n\n"
         "✍️ <b>Добавление:</b>\n"
         "/read 30 — записать страницы\n"
@@ -209,6 +210,7 @@ RU = {
     "cmd_shelf": "Моя полка",
     "cmd_stats": "Статистика",
     "cmd_goal": "Цель на месяц",
+    "cmd_challenge": "Мои челленджи",
     "cmd_remind": "Напоминание почитать",
     "cmd_add": "Добавить книгу вручную",
     "cmd_read": "Записать прочитанные страницы",
@@ -282,6 +284,15 @@ RU = {
     "ch_none": "Челлендж не задан. Админы: /challenge 3000",
     "ch_usage": "Напиши цель в страницах, например /challenge 3000, или /challenge off",
     "ch_complete": "🎉 <b>Челлендж выполнен!</b> Группа прочитала {target} стр.",
+    # --- сброс топа ---
+    "g_reset_done": "🔄 <b>Топ обнулён!</b> Все страницы и достижения сброшены. Начинаем с чистого листа!",
+    "g_reset_info": "🔄 Последний сброс топа: {date} ({user})",
+    "g_reset_none": "Топ ещё не сбрасывался.",
+    "cmd_reset": "Обнулить топ (админы)",
+    "cmd_resetinfo": "Инфо о сбросе топа",
+    "cmd_shelf_image": "Картинка полки (для соцсетей)",
+    "cmd_year": "Год в книгах (инфографика)",
+
     # --- импорт ---
     "import_help": (
         "📥 <b>Импорт книг</b>\n\n"
@@ -375,6 +386,28 @@ RU = {
     # --- голосовые заметки ---
     "voice_hint": "📝 Отправь голосовую заметку, когда ждёшь ввода цитаты или мысли о книге",
     "voice_saved": "🎤 Голосовая заметка сохранена",
+    # --- челленджи (личные) ---
+    "challenge_head": "🎯 <b>Мои челленджи</b>",
+    "challenge_none": "У тебя пока нет активных челленджей.",
+    "challenge_hint": "Челленджи — это цели на определённый срок: прочитать N книг за месяц или год.",
+    "challenge_create": "➕ Создать челлендж",
+    "challenge_select": "Выбери челлендж или создай свой:",
+    "challenge_month_5": "📅 5 книг за месяц",
+    "challenge_month_10": "📅 10 книг за месяц",
+    "challenge_year_50": "🗓 50 книг за год",
+    "challenge_year_100": "🗓 100 книг за год",
+    "challenge_created": "✅ Челлендж «{title}» создан! Цель: {target} книг за {days} дней.",
+    "challenge_until": "до {date}",
+    "challenge_default_title": "{n} книг за {d} дней",
+    # --- отзывы ---
+    "b_review": "✍️ Написать отзыв",
+    "review_prompt": "✍️ Напиши свой отзыв о книге «{title}». /cancel — отмена",
+    "review_saved": "✅ Отзыв сохранён!",
+    "review_title": "📝 <b>Твой отзыв:</b>",
+    # --- тренды ---
+    "trend_up": "Темп чтения растёт!",
+    "trend_down": "Темп снизился",
+
 }
 
 EN = {
@@ -585,6 +618,7 @@ EN = {
     "cmd_shelf": "My shelf",
     "cmd_stats": "Statistics",
     "cmd_goal": "Monthly goal",
+    "cmd_challenge": "My challenges",
     "cmd_remind": "Reading reminder",
     "cmd_add": "Add a book manually",
     "cmd_read": "Log pages you read",
@@ -658,6 +692,15 @@ EN = {
     "ch_none": "No challenge set. Admins: /challenge 3000",
     "ch_usage": "Send the goal in pages, e.g. /challenge 3000, or /challenge off",
     "ch_complete": "🎉 <b>Challenge complete!</b> The group read {target} pages.",
+    # --- top reset ---
+    "g_reset_done": "🔄 <b>Leaderboard reset!</b> All pages and achievements cleared. Starting fresh!",
+    "g_reset_info": "🔄 Last leaderboard reset: {date} ({user})",
+    "g_reset_none": "Leaderboard hasn't been reset yet.",
+    "cmd_reset": "Reset leaderboard (admins)",
+    "cmd_resetinfo": "Leaderboard reset info",
+    "cmd_shelf_image": "Shelf image (for social media)",
+    "cmd_year": "Year in books (infographic)",
+
     # --- import ---
     "import_help": (
         "📥 <b>Import books</b>\n\n"
@@ -751,6 +794,28 @@ EN = {
     # --- voice notes ---
     "voice_hint": "📝 Send a voice note when adding a quote or thought about a book",
     "voice_saved": "🎤 Voice note saved",
+    # --- challenges (personal) ---
+    "challenge_head": "🎯 <b>My challenges</b>",
+    "challenge_none": "You don't have any active challenges yet.",
+    "challenge_hint": "Challenges are time-bound goals: read N books per month or year.",
+    "challenge_create": "➕ Create challenge",
+    "challenge_select": "Pick a challenge or create your own:",
+    "challenge_month_5": "📅 5 books per month",
+    "challenge_month_10": "📅 10 books per month",
+    "challenge_year_50": "🗓 50 books per year",
+    "challenge_year_100": "🗓 100 books per year",
+    "challenge_created": "✅ Challenge «{title}» created! Goal: {target} books in {days} days.",
+    "challenge_until": "until {date}",
+    "challenge_default_title": "{n} books in {d} days",
+    # --- reviews ---
+    "b_review": "✍️ Write a review",
+    "review_prompt": "✍️ Write your review of «{title}». /cancel to stop",
+    "review_saved": "✅ Review saved!",
+    "review_title": "📝 <b>Your review:</b>",
+    # --- trends ---
+    "trend_up": "Reading pace is increasing!",
+    "trend_down": "Pace has slowed down",
+
 }
 
 TEXTS = {"ru": RU, "en": EN}
