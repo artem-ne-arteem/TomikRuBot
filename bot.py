@@ -37,6 +37,9 @@ from aiogram.types import (
     ErrorEvent,
     FSInputFile,
     InlineKeyboardButton,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
     Message,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -157,6 +160,27 @@ db.executescript(
         earned_at TEXT,
         PRIMARY KEY (user_id, code)
     );
+    CREATE TABLE IF NOT EXISTS book_clubs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        book_id INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        discussion_topic_id INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS club_members (
+        club_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (club_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS reading_insights (
+        user_id INTEGER PRIMARY KEY,
+        best_weekday INTEGER,
+        best_hour INTEGER,
+        avg_daily_pages REAL,
+        last_computed TEXT
+    );
     """
 )
 
@@ -201,6 +225,13 @@ add_cols(
         ("challenge_done", "TEXT"),
         ("weekly_on", "INTEGER DEFAULT 1"),
         ("weekly_last", "TEXT"),
+    ],
+)
+add_cols(
+    "sessions",
+    [
+        ("book_title", "TEXT"),
+        ("notes_text", "TEXT"),
     ],
 )
 db.commit()
@@ -1012,6 +1043,48 @@ def stats_text(uid: int) -> str:
 
 
 # ======================================================================
+#                        INLINE MODE (поиск книг)
+# ======================================================================
+@dp.inline_query()
+async def inline_search(query: InlineQuery):
+    """Inline-режим: @tomik_bot название книги → можно добавить в любом чате."""
+    uid = query.from_user.id
+    text = query.query.strip()
+    if len(text) < 3:
+        await query.answer([], cache_time=30, switch_pm_text=t(uid, "inline_hint"), switch_pm_parameter="start")
+        return
+
+    results = await search_books(text)
+    if not results:
+        await query.answer([], cache_time=60, switch_pm_text=t(uid, "inline_no_results"), switch_pm_parameter="start")
+        return
+
+    articles = []
+    for i, book in enumerate(results[:10]):
+        year = f" ({book['year']})" if book.get("year") else ""
+        pages_info = f", {book['pages']} стр." if book.get("pages") else ""
+
+        msg_text = (
+            f"📘 <b>{escape(book['title'])}</b>{year}\n"
+            f"✍️ {escape(book['author'])}{pages_info}\n\n"
+            f"Добавлено через @{BOT_USERNAME}"
+        )
+
+        articles.append(InlineQueryResultArticle(
+            id=str(i),
+            title=book["title"],
+            description=f"{book['author']}{year}{pages_info}",
+            thumbnail_url=book.get("cover"),
+            input_message_content=InputTextMessageContent(
+                message_text=msg_text,
+                parse_mode=ParseMode.HTML,
+            ),
+        ))
+
+    await query.answer(articles, cache_time=300)
+
+
+# ======================================================================
 #                           ЛИЧНЫЕ ЧАТЫ
 # ======================================================================
 _START_FILE_ID: str | None = None  # после первой отправки Telegram запоминает файл
@@ -1429,6 +1502,39 @@ async def on_photo(m: Message):
         await send_card(m.bot, m.chat.id, b, t(uid, "saved"))
 
 
+@pr.message(F.voice | F.audio)
+async def on_voice(m: Message):
+    """Голосовые заметки: записывает как текстовую заметку (транскрипция опциональна)."""
+    uid = m.from_user.id
+
+    # Проверяем, ждём ли мы заметку для книги
+    p = PENDING.get(uid)
+    if not p or p[0] not in ("quote", "note"):
+        await m.answer(t(uid, "voice_hint"))
+        return
+
+    kind, book_id = p
+    if not get_book(book_id, uid):
+        PENDING.pop(uid, None)
+        await m.answer(t(uid, "not_found"))
+        return
+
+    # Сохраняем ID аудио как заметку (можно добавить транскрипцию через Whisper API)
+    voice_id = (m.voice or m.audio).file_id
+    text = f"🎤 Голосовое сообщение: {voice_id}"
+
+    db.execute(
+        "INSERT INTO notes (user_id, book_id, kind, text) VALUES (?,?,?,?)",
+        (uid, book_id, "note", text),
+    )
+    db.commit()
+    PENDING.pop(uid, None)
+
+    view, kb = notes_view(book_id, uid)
+    await m.answer(t(uid, "voice_saved") + "\n\n" + view, reply_markup=kb)
+    await announce_badges(m.bot, uid, m.chat.id)
+
+
 # ---------- Основные callbacks ----------
 @pr.callback_query(F.data.startswith("add:"))
 async def cb_add(c: CallbackQuery):
@@ -1663,6 +1769,115 @@ async def export_notes(m: Message):
     await m.answer_document(
         BufferedInputFile(md.encode("utf-8"), filename="tomik-notes.md"),
         caption=t(uid, "export_caption"),
+    )
+
+
+@pr.message(Command("export_csv"))
+async def export_csv_cmd(m: Message):
+    """Экспорт библиотеки в CSV (для импорта в другие сервисы)."""
+    uid = m.from_user.id
+    books = db.execute(
+        "SELECT * FROM books WHERE user_id=? ORDER BY added_at DESC",
+        (uid,),
+    ).fetchall()
+
+    if not books:
+        await m.answer("Полка пуста, экспортировать нечего.")
+        return
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    # Формат, совместимый с Goodreads
+    writer.writerow([
+        "Title", "Author", "ISBN", "My Rating", "Average Rating", "Publisher", "Binding",
+        "Number of Pages", "Year Published", "Original Publication Year", "Date Read",
+        "Date Added", "Bookshelves", "Exclusive Shelf", "My Review", "Spoiler",
+        "Private Notes", "Read Count", "Owned Copies"
+    ])
+
+    for b in books:
+        shelf_map = {"want": "to-read", "reading": "currently-reading", "done": "read", "dropped": "did-not-finish"}
+        tags = [r["name"] for r in book_tag_rows(b["id"])]
+        notes = db.execute(
+            "SELECT text FROM notes WHERE book_id=? AND user_id=? ORDER BY id",
+            (b["id"], uid),
+        ).fetchall()
+        notes_text = " | ".join(n["text"][:100] for n in notes[:3]) if notes else ""
+
+        writer.writerow([
+            b["title"],
+            b["author"] or "",
+            b["isbn"] or "",
+            b["rating"] or "",
+            "",  # Average Rating
+            "",  # Publisher
+            "",  # Binding
+            b["pages"] or "",
+            b["year"] or "",
+            b["year"] or "",
+            b["finished_at"] or "",
+            b["added_at"],
+            ", ".join(tags),
+            shelf_map.get(b["status"], "to-read"),
+            "",  # My Review
+            "",  # Spoiler
+            notes_text,
+            1 if b["status"] == "done" else 0,
+            0,  # Owned Copies
+        ])
+
+    await m.answer_document(
+        BufferedInputFile(output.getvalue().encode("utf-8-sig"), filename="tomik-library.csv"),
+        caption=f"📥 Экспорт библиотеки ({len(books)} книг)\nФормат: Goodreads CSV",
+    )
+
+
+@pr.message(Command("export_json"))
+async def export_json_cmd(m: Message):
+    """Экспорт в JSON для программистов и API интеграций."""
+    uid = m.from_user.id
+    books = db.execute(
+        "SELECT * FROM books WHERE user_id=? ORDER BY added_at DESC",
+        (uid,),
+    ).fetchall()
+
+    if not books:
+        await m.answer("Полка пуста.")
+        return
+
+    data = {
+        "user": {
+            "id": uid,
+            "name": user_name(uid),
+            "export_date": now_local().isoformat(),
+        },
+        "stats": badge_metrics(uid),
+        "books": []
+    }
+
+    for b in books:
+        book_data = dict(b)
+        book_data["tags"] = [r["name"] for r in book_tag_rows(b["id"])]
+        book_data["notes"] = [
+            {
+                "kind": n["kind"],
+                "text": n["text"],
+                "page": n["page"],
+                "created_at": n["created_at"],
+            }
+            for n in db.execute(
+                "SELECT * FROM notes WHERE book_id=? AND user_id=?",
+                (b["id"], uid),
+            ).fetchall()
+        ]
+        data["books"].append(book_data)
+
+    await m.answer_document(
+        BufferedInputFile(
+            json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
+            filename="tomik-export.json"
+        ),
+        caption=f"📥 Полный экспорт в JSON ({len(books)} книг)",
     )
 
 
@@ -2780,17 +2995,312 @@ def group_week_text(chat_id: int, lang: str) -> str:
 
 
 # ======================================================================
+#                    КНИЖНЫЕ КЛУБЫ (СОВМЕСТНОЕ ЧТЕНИЕ)
+# ======================================================================
+@gr.message(Command("club_create"))
+async def club_create_cmd(m: Message, command: CommandObject):
+    """Создание книжного клуба в группе."""
+    if not await is_admin(m.bot, m.chat.id, m.from_user.id):
+        await m.answer(tl(group_lang(m.chat.id), "g_admin_only"))
+        return
+
+    name = (command.args or "").strip()
+    if not name or len(name) < 3:
+        await m.answer("Использование: /club_create Название клуба")
+        return
+
+    # Проверяем, нет ли уже клуба в этой группе
+    existing = db.execute("SELECT id FROM book_clubs WHERE chat_id=?", (m.chat.id,)).fetchone()
+    if existing:
+        await m.answer("В этой группе уже есть книжный клуб!")
+        return
+
+    cur = db.execute(
+        "INSERT INTO book_clubs (chat_id, name) VALUES (?,?)",
+        (m.chat.id, name),
+    )
+    db.commit()
+
+    club_id = cur.lastrowid
+    lang = group_lang(m.chat.id)
+    await m.answer(tl(lang, "club_created", name=escape(name), id=club_id))
+
+
+@gr.message(Command("club_join"))
+async def club_join_cmd(m: Message):
+    """Присоединиться к книжному клубу группы."""
+    club = db.execute("SELECT * FROM book_clubs WHERE chat_id=?", (m.chat.id,)).fetchone()
+    if not club:
+        await m.answer("В этой группе нет книжного клуба. Создайте: /club_create")
+        return
+
+    existed = db.execute(
+        "SELECT 1 FROM club_members WHERE club_id=? AND user_id=?",
+        (club["id"], m.from_user.id),
+    ).fetchone()
+
+    if existed:
+        await m.answer("Ты уже в клубе!")
+        return
+
+    db.execute(
+        "INSERT INTO club_members (club_id, user_id) VALUES (?,?)",
+        (club["id"], m.from_user.id),
+    )
+    db.commit()
+
+    lang = group_lang(m.chat.id)
+    await m.answer(tl(lang, "club_joined", user=escape(user_name(m.from_user.id)), name=escape(club["name"])))
+
+
+@gr.message(Command("club_leave"))
+async def club_leave_cmd(m: Message):
+    """Покинуть книжный клуб."""
+    club = db.execute("SELECT * FROM book_clubs WHERE chat_id=?", (m.chat.id,)).fetchone()
+    if not club:
+        return
+
+    db.execute(
+        "DELETE FROM club_members WHERE club_id=? AND user_id=?",
+        (club["id"], m.from_user.id),
+    )
+    db.commit()
+
+    lang = group_lang(m.chat.id)
+    await m.answer(tl(lang, "club_leave", user=escape(user_name(m.from_user.id)), name=escape(club["name"])))
+
+
+@gr.message(Command("club_book"))
+async def club_book_cmd(m: Message, command: CommandObject):
+    """Установить книгу месяца для клуба (только админы)."""
+    if not await is_admin(m.bot, m.chat.id, m.from_user.id):
+        await m.answer(tl(group_lang(m.chat.id), "g_admin_only"))
+        return
+
+    club = db.execute("SELECT * FROM book_clubs WHERE chat_id=?", (m.chat.id,)).fetchone()
+    if not club:
+        await m.answer("Сначала создайте клуб: /club_create")
+        return
+
+    query = (command.args or "").strip()
+    if not query:
+        # Показать текущую книгу
+        if club["book_id"]:
+            b = db.execute("SELECT * FROM books WHERE id=?", (club["book_id"],)).fetchone()
+            if b:
+                lang = group_lang(m.chat.id)
+                await m.answer(tl(lang, "club_book_set", title=escape(b["title"]), author=escape(b["author"] or "?")))
+            return
+        await m.answer("Книга месяца не установлена. Используйте: /club_book Название книги")
+        return
+
+    # Поиск книги
+    results = await search_books(query)
+    if not results:
+        await m.answer("Книгу не нашёл 😕")
+        return
+
+    # Берём первый результат
+    book = results[0]
+    # Добавляем книгу от имени бота (user_id=0 для системных книг)
+    cur = db.execute(
+        "INSERT INTO books (user_id, title, author, year, pages, cover, genre) VALUES (0,?,?,?,?,?,?)",
+        (book["title"], book["author"], book.get("year"), book.get("pages"), book.get("cover"), book.get("genre")),
+    )
+    db.commit()
+    book_id = cur.lastrowid
+
+    db.execute("UPDATE book_clubs SET book_id=? WHERE id=?", (book_id, club["id"]))
+    db.commit()
+
+    lang = group_lang(m.chat.id)
+    await m.answer(tl(lang, "club_book_set", title=escape(book["title"]), author=escape(book["author"])))
+
+
+@gr.message(Command("club_info"))
+async def club_info_cmd(m: Message):
+    """Информация о клубе."""
+    club = db.execute("SELECT * FROM book_clubs WHERE chat_id=?", (m.chat.id,)).fetchone()
+    if not club:
+        await m.answer("В этой группе нет книжного клуба.")
+        return
+
+    members = db.execute(
+        "SELECT user_id FROM club_members WHERE club_id=?",
+        (club["id"],),
+    ).fetchall()
+
+    lines = [f"📚 <b>Клуб «{escape(club['name'])}»</b>", ""]
+
+    if club["book_id"]:
+        b = db.execute("SELECT * FROM books WHERE id=?", (club["book_id"],)).fetchone()
+        if b:
+            lines.append(f"📖 Книга месяца: <b>{escape(b['title'])}</b> — {escape(b['author'] or '?')}")
+            lines.append("")
+
+    lines.append(f"👥 Участников: {len(members)}")
+
+    if members:
+        names = [user_name(r["user_id"]) for r in members[:10]]
+        lines.append("• " + ", ".join(escape(n) for n in names))
+        if len(members) > 10:
+            lines.append(f"   ...и ещё {len(members) - 10}")
+
+    await m.answer("\n".join(lines))
+
+
+# ======================================================================
 #              ЗНАЧКИ И КАРТИНКА С ИТОГАМИ ДЛЯ ШЕРИНГА
 # ======================================================================
 BADGE_FAMILIES = {
-    "books": (1, 5, 10, 25, 50, 100),
-    "pages": (500, 1000, 5000, 10000, 25000),
-    "streak": (3, 7, 14, 30, 100),
-    "hours": (1, 10, 50, 100),
-    "notes": (1, 10, 50),
-    "genres": (3, 5, 10),
+    "books": (1, 5, 10, 25, 50, 100, 250, 500),
+    "pages": (500, 1000, 5000, 10000, 25000, 50000, 100000),
+    "streak": (3, 7, 14, 30, 100, 365),
+    "hours": (1, 10, 50, 100, 500, 1000),
+    "notes": (1, 10, 50, 100, 500),
+    "genres": (3, 5, 10, 15, 20),
 }
-TIER_ICONS = ["🥉", "🥈", "🥇", "🏆", "💎", "👑"]
+TIER_ICONS = ["🥉", "🥈", "🥇", "🏆", "💎", "👑", "⭐", "🌟"]
+
+
+def calculate_level(uid: int) -> tuple[int, int, int]:
+    """Вычисляет уровень читателя. Возвращает (уровень, текущий XP, XP до следующего уровня)."""
+    m = badge_metrics(uid)
+
+    # Формула XP: книги * 100 + страницы + серия_рекорд * 50 + часы * 10 + заметки * 5
+    xp = (
+        m["books"] * 100 +
+        m["pages"] +
+        m["streak"] * 50 +
+        m["hours"] * 10 +
+        m["notes"] * 5
+    )
+
+    # Уровень: квадратный корень из (XP / 1000), минимум 1
+    level = max(1, int((xp / 1000) ** 0.5) + 1)
+
+    # XP для следующего уровня
+    next_level_xp = (level ** 2) * 1000
+    current_level_xp = ((level - 1) ** 2) * 1000
+    xp_progress = xp - current_level_xp
+    xp_needed = next_level_xp - current_level_xp
+
+    return level, xp_progress, xp_needed
+
+
+def get_level_title(level: int, lang: str) -> str:
+    """Возвращает звание читателя по уровню."""
+    titles_ru = [
+        "Новичок", "Читатель", "Книгочей", "Библиофил", "Мастер чтения",
+        "Гуру литературы", "Книжный мудрец", "Хранитель знаний", "Легенда страниц",
+        "Бог книжных полок"
+    ]
+    titles_en = [
+        "Novice", "Reader", "Bookworm", "Bibliophile", "Reading Master",
+        "Literary Guru", "Book Sage", "Keeper of Knowledge", "Page Legend",
+        "God of Bookshelves"
+    ]
+
+    titles = titles_ru if lang == "ru" else titles_en
+    idx = min(level // 5, len(titles) - 1)
+    return titles[idx]
+
+
+@pr.message(Command("level"))
+async def level_cmd(m: Message):
+    """Показать уровень и прогресс."""
+    uid = m.from_user.id
+    level, xp, xp_needed = calculate_level(uid)
+    title = get_level_title(level, lang_of(uid))
+
+    bar = bar10(xp, xp_needed)
+    pct = min(100, round(xp * 100 / xp_needed)) if xp_needed > 0 else 100
+
+    text = (
+        f"🎖 <b>Уровень {level}</b> — {title}\n\n"
+        f"{bar} {pct}%\n"
+        f"XP: {fmt_num(xp)} / {fmt_num(xp_needed)}\n\n"
+        f"💡 Получай XP за:\n"
+        f"• Прочитанные книги (+100 XP)\n"
+        f"• Прочитанные страницы (+1 XP)\n"
+        f"• Серии чтения (+50 XP за день)\n"
+        f"• Время чтения (+10 XP за час)\n"
+        f"• Заметки о книгах (+5 XP)"
+    )
+
+    await m.answer(text)
+
+
+@pr.message(Command("profile"))
+async def profile_cmd(m: Message):
+    """Публичный профиль с ссылкой для шеринга."""
+    uid = m.from_user.id
+    name = user_name(uid)
+    level, _, _ = calculate_level(uid)
+    title = get_level_title(level, lang_of(uid))
+    m_data = badge_metrics(uid)
+    cur_streak, best_streak = streaks(uid)
+
+    # Любимые авторы и жанры
+    top_author = db.execute(
+        "SELECT author, COUNT(*) c FROM books WHERE user_id=? AND status='done' "
+        "AND author NOT IN ('', '—', 'Автор неизвестен', 'Unknown author') "
+        "GROUP BY author ORDER BY c DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+
+    top_genre = db.execute(
+        "SELECT genre, COUNT(*) c FROM books WHERE user_id=? AND genre IS NOT NULL "
+        "GROUP BY genre ORDER BY c DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+
+    text = [
+        f"👤 <b>{escape(name)}</b>",
+        f"🎖 Уровень {level} — {title}",
+        "",
+        f"📚 Прочитано книг: {m_data['books']}",
+        f"📄 Страниц: {fmt_num(m_data['pages'])}",
+        f"🔥 Серия: {cur_streak} дн. (рекорд {best_streak})",
+        f"⏱ Время чтения: {fmt_minutes(uid, m_data['hours'] * 60)}",
+    ]
+
+    if top_author:
+        text.append(f"✍️ Любимый автор: {escape(top_author['author'])} ({top_author['c']} книг)")
+
+    if top_genre:
+        text.append(f"🎭 Любимый жанр: {escape(top_genre['genre'])} ({top_genre['c']} книг)")
+
+    # Последние прочитанные книги
+    recent = db.execute(
+        "SELECT * FROM books WHERE user_id=? AND status='done' "
+        "ORDER BY finished_at DESC LIMIT 3",
+        (uid,),
+    ).fetchall()
+
+    if recent:
+        text.append("")
+        text.append("📖 <b>Последние книги:</b>")
+        for b in recent:
+            text.append(f"• {escape(b['title'])} — {escape(b['author'] or '?')}")
+
+    # Ссылка для шеринга
+    link = f"https://t.me/{BOT_USERNAME}?start=profile_{uid}"
+    text.append("")
+    text.append(f"🔗 Поделиться профилем: {link}")
+
+    await m.answer("\n".join(text))
+
+
+BADGE_FAMILIES = {
+    "books": (1, 5, 10, 25, 50, 100, 250, 500),
+    "pages": (500, 1000, 5000, 10000, 25000, 50000, 100000),
+    "streak": (3, 7, 14, 30, 100, 365),
+    "hours": (1, 10, 50, 100, 500, 1000),
+    "notes": (1, 10, 50, 100, 500),
+    "genres": (3, 5, 10, 15, 20),
+}
+TIER_ICONS = ["🥉", "🥈", "🥇", "🏆", "💎", "👑", "⭐", "🌟"]
 
 
 def badge_metrics(uid: int) -> dict[str, int]:
@@ -2852,6 +3362,198 @@ def badges_text(uid: int) -> str:
 @pr.message(Command("badges"))
 async def badges_cmd(m: Message):
     await m.answer(badges_text(m.from_user.id))
+
+
+# ======================================================================
+#                    ТЕПЛОВАЯ КАРТА АКТИВНОСТИ
+# ======================================================================
+def generate_heatmap(uid: int, weeks: int = 12) -> str:
+    """Генерирует ASCII тепловую карту активности (как на GitHub)."""
+    today = now_local().date()
+    start = today - timedelta(days=weeks * 7)
+
+    # Получаем данные по дням
+    stats = day_stats(uid, start.isoformat(), today.isoformat())
+
+    # Группируем по неделям (7 строк - дни недели)
+    grid = []
+    current = start
+    week = []
+
+    while current <= today:
+        pages = stats.get(current.isoformat(), (0, 0))[0]
+        # Интенсивность: 0=пусто, 1=1-5стр, 2=6-20стр, 3=21-50стр, 4=51+стр
+        if pages == 0:
+            symbol = "□"
+        elif pages <= 5:
+            symbol = "▪"
+        elif pages <= 20:
+            symbol = "▫"
+        elif pages <= 50:
+            symbol = "▬"
+        else:
+            symbol = "▪"
+
+        week.append(symbol)
+        if current.weekday() == 6:  # Воскресенье
+            grid.append(week)
+            week = []
+        current += timedelta(days=1)
+
+    if week:  # Добавляем неполную неделю
+        while len(week) < 7:
+            week.append("□")
+        grid.append(week)
+
+    # Транспонируем: строки = дни недели
+    weekdays = t(uid, "weekdays").split()
+    lines = []
+    for day_idx in range(7):
+        day_line = weekdays[day_idx] + " "
+        for week in grid:
+            if day_idx < len(week):
+                day_line += week[day_idx]
+        lines.append(f"<code>{day_line}</code>")
+
+    total_pages = sum(p for p, _ in stats.values())
+    active_days = len([p for p in stats.values() if p[0] > 0])
+
+    return (
+        t(uid, "heatmap_title") + "\n\n" +
+        "\n".join(lines) + "\n\n" +
+        t(uid, "heatmap_legend") + "\n" +
+        t(uid, "heatmap_total", pages=total_pages, days=active_days)
+    )
+
+
+@pr.message(Command("heatmap"))
+async def heatmap_cmd(m: Message):
+    """Показать тепловую карту активности."""
+    await m.answer(generate_heatmap(m.from_user.id))
+
+
+# ======================================================================
+#                    УМНАЯ АНАЛИТИКА И ИНСАЙТЫ
+# ======================================================================
+def compute_insights(uid: int) -> None:
+    """Вычисляет и сохраняет инсайты пользователя."""
+    # Лучший день недели
+    rows = db.execute(
+        "SELECT day, SUM(pages) p FROM reading_log WHERE user_id=? GROUP BY day",
+        (uid,),
+    ).fetchall()
+
+    if not rows:
+        return
+
+    by_weekday = {}
+    for r in rows:
+        try:
+            d = date.fromisoformat(r["day"])
+            wd = d.weekday()
+            by_weekday[wd] = by_weekday.get(wd, 0) + r["p"]
+        except Exception:
+            pass
+
+    best_weekday = max(by_weekday, key=by_weekday.get) if by_weekday else None
+
+    # Средние страницы в день
+    if rows:
+        days_span = (date.fromisoformat(max(r["day"] for r in rows)) -
+                     date.fromisoformat(min(r["day"] for r in rows))).days + 1
+        avg_pages = sum(r["p"] for r in rows) / max(1, days_span)
+    else:
+        avg_pages = 0
+
+    db.execute(
+        "INSERT OR REPLACE INTO reading_insights (user_id, best_weekday, avg_daily_pages, last_computed) "
+        "VALUES (?,?,?,?)",
+        (uid, best_weekday, avg_pages, today_str()),
+    )
+    db.commit()
+
+
+def predict_finish_date(uid: int, book_id: int) -> tuple[str, int] | None:
+    """Предсказывает дату дочитывания книги."""
+    b = get_book(book_id, uid)
+    if not b or not b["pages"] or b["status"] != "reading":
+        return None
+
+    remaining = b["pages"] - (b["page"] or 0)
+    if remaining <= 0:
+        return None
+
+    # Средняя скорость за последние 14 дней
+    recent = (now_local().date() - timedelta(days=14)).isoformat()
+    pages_14d = pages_between(uid, recent)
+
+    if pages_14d < 10:  # Мало данных
+        return None
+
+    avg_per_day = pages_14d / 14
+    days_left = math.ceil(remaining / avg_per_day)
+    finish_date = (now_local().date() + timedelta(days=days_left)).strftime("%d.%m.%Y")
+
+    return finish_date, days_left
+
+
+def get_insights_text(uid: int) -> str:
+    """Генерирует текст с персональными инсайтами."""
+    compute_insights(uid)
+
+    r = db.execute("SELECT * FROM reading_insights WHERE user_id=?", (uid,)).fetchone()
+    lines = [t(uid, "insights_title"), ""]
+
+    if r and r["best_weekday"] is not None:
+        days = t(uid, "weekdays").split()
+        lines.append(t(uid, "insights_best_day", day=days[r["best_weekday"]]))
+
+    # Жанры в тренде (последние 30 дней)
+    recent_genres = db.execute(
+        "SELECT b.genre, COUNT(*) c FROM books b "
+        "WHERE b.user_id=? AND b.status='done' AND b.finished_at>=? AND b.genre IS NOT NULL "
+        "GROUP BY b.genre ORDER BY c DESC LIMIT 1",
+        (uid, (now_local().date() - timedelta(days=30)).isoformat()),
+    ).fetchone()
+
+    if recent_genres:
+        lines.append(t(uid, "insights_genre_trend", genre=escape(recent_genres["genre"])))
+
+    # Книги, которые слишком долго читаются
+    slow_books = db.execute(
+        "SELECT * FROM books WHERE user_id=? AND status='reading' AND started_at IS NOT NULL "
+        "AND julianday('now') - julianday(started_at) > 30",
+        (uid,),
+    ).fetchall()
+
+    if slow_books:
+        for b in slow_books[:2]:
+            days = (now_local().date() - date.fromisoformat(b["started_at"])).days
+            lines.append(t(uid, "insights_slow_book", title=escape(b["title"]), days=days))
+
+    # Прогноз дочитывания текущей книги
+    reading = db.execute(
+        "SELECT * FROM books WHERE user_id=? AND status='reading' ORDER BY id DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+
+    if reading:
+        pred = predict_finish_date(uid, reading["id"])
+        if pred:
+            finish_date, days_left = pred
+            lines.append("")
+            lines.append(t(uid, "predict_finish", date=finish_date, days=days_left))
+        else:
+            lines.append("")
+            lines.append(t(uid, "predict_nodata"))
+
+    return "\n".join(lines)
+
+
+@pr.message(Command("insights"))
+async def insights_cmd(m: Message):
+    """Показать персональные инсайты."""
+    await m.answer(get_insights_text(m.from_user.id))
 
 
 # ---------- Картинка с итогами ----------
@@ -3300,10 +4002,14 @@ async def reminder_loop(bot: Bot) -> None:
 
 async def set_commands(bot: Bot) -> None:
     private = [
-        "shelf", "timer", "recs", "stats", "badges", "card", "week", "goal", "remind",
-        "add", "import", "read", "export", "lang", "cancel",
+        "shelf", "stats", "level", "profile", "badges", "card",
+        "timer", "read", "goal", "week", "heatmap", "insights",
+        "recs", "add", "import", "export", "remind", "lang", "cancel",
     ]
-    groups = ["join", "leave", "top", "read", "challenge", "weekly", "digest", "lang"]
+    groups = [
+        "join", "leave", "top", "read", "challenge", "weekly", "digest", "lang",
+        "club_create", "club_join", "club_leave", "club_book", "club_info",
+    ]
     for code in (None, "en"):
         lang = code or "ru"
         kw = {"language_code": code} if code else {}

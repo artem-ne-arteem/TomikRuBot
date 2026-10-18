@@ -5,22 +5,29 @@ RU = {
     "start": (
         "Привет, {name}! Я <b>Томик</b> — твоя книжная полка.\n\n"
         "Напиши название книги или ISBN либо пришли фото штрихкода, и я добавлю книгу на полку.\n\n"
+        "📚 <b>Основное:</b>\n"
         "/shelf — полка и теги\n"
         "/timer — таймер чтения\n"
         "/recs — что почитать дальше\n"
-        "/stats — статистика\n"
-        "/badges — значки, /card — картинка с итогами\n"
+        "/stats — статистика\n\n"
+        "📊 <b>Аналитика:</b>\n"
+        "/heatmap — тепловая карта активности\n"
+        "/insights — персональные инсайты и прогнозы\n"
+        "/badges — значки достижений\n"
+        "/card — картинка с итогами\n\n"
+        "⚙️ <b>Настройки:</b>\n"
         "/week — итоги недели\n"
         "/goal — цель на месяц\n"
-        "/remind — напоминание почитать\n"
-        "/read 30 — записать прочитанные страницы\n"
+        "/remind — напоминание почитать\n\n"
+        "✍️ <b>Добавление:</b>\n"
+        "/read 30 — записать страницы\n"
         "/add — добавить книгу вручную\n"
-        "/import — импорт из Goodreads / Livelib (CSV)\n"
-        "/export — заметки и цитаты\n"
-        "/lang — язык\n\n"
-        "👥 <b>Добавь меня в группу с друзьями: рейтинг чтения, итоги дня и недели, общий челлендж.<b>\n\n"
-        "📢 Наш новостной канал: @tomik_tg\n"
-        "🛠 Бот сделан: @fyave"
+        "/import — импорт из Goodreads/Livelib\n"
+        "/export — экспорт заметок\n\n"
+        "👥 <b>Добавь меня в группу:</b> рейтинг чтения, книжные клубы, челленджи!\n\n"
+        "💡 <b>Inline-режим:</b> @{bot} название → поиск книг в любом чате\n\n"
+        "📢 Канал: @tomik_tg\n"
+        "🛠 Автор: @fyave"
     ),
     "cancelled": "Ок, отменил.",
     "not_found": "Не нашёл эту книгу.",
@@ -294,6 +301,16 @@ RU = {
     "cmd_import": "Импорт из CSV",
     "cmd_challenge": "Челлендж группы",
     "cmd_weekly": "Итоги недели в группе",
+    "cmd_heatmap": "Тепловая карта активности",
+    "cmd_insights": "Персональные инсайты",
+    "cmd_club_create": "Создать книжный клуб",
+    "cmd_club_join": "Вступить в клуб",
+    "cmd_club_leave": "Покинуть клуб",
+    "cmd_club_book": "Книга месяца клуба",
+    "cmd_club_info": "Информация о клубе",
+    # --- система уровней ---
+    "cmd_level": "Мой уровень",
+    "cmd_profile": "Мой профиль",
     # --- значки ---
     "bd_head": "🏅 <b>Твои значки</b> ({got}/{total})",
     "bd_next": " → дальше {n} (сейчас {cur})",
@@ -333,6 +350,31 @@ RU = {
     "months_full": "январь февраль март апрель май июнь июль август сентябрь октябрь ноябрь декабрь",
     "cmd_badges": "Мои значки",
     "cmd_card": "Картинка с итогами",
+    # --- inline mode ---
+    "inline_hint": "📚 Введите название книги для поиска",
+    "inline_no_results": "😕 Ничего не нашлось",
+    # --- тепловая карта ---
+    "heatmap_title": "📅 <b>Твоя читательская активность</b>",
+    "heatmap_legend": "□ нет данных  ▪ 1-5 стр  ▫ 6-20 стр  ▪ 21-50 стр  ▪ 51+ стр",
+    "heatmap_total": "📊 За период: {pages} стр. · {days} дней активности",
+    # --- аналитика ---
+    "predict_finish": "📖 Дочитаешь примерно к <b>{date}</b> (осталось {days} дн.)",
+    "predict_nodata": "Пока недостаточно данных для прогноза — читай регулярно!",
+    "insights_title": "💡 <b>Твои инсайты</b>",
+    "insights_best_day": "🏆 Самый продуктивный день: {day}",
+    "insights_best_time": "⏰ Лучшее время для чтения: {time}",
+    "insights_genre_trend": "📈 В последнее время читаешь больше: {genre}",
+    "insights_slow_book": "🐌 Книга «{title}» уже {days} дн. в статусе «Читаю»",
+    # --- книжные клубы ---
+    "club_create": "📚 Создай книжный клуб: /club_create Название клуба",
+    "club_created": "✨ Клуб «{name}» создан! Участники: /club_join {id}",
+    "club_joined": "✅ {user} вступил в клуб «{name}»",
+    "club_leave": "👋 {user} покинул клуб «{name}»",
+    "club_book_set": "📖 Книга месяца: «{title}» — {author}",
+    "club_discuss": "💬 Обсуждение в клубе «{name}»:",
+    # --- голосовые заметки ---
+    "voice_hint": "📝 Отправь голосовую заметку, когда ждёшь ввода цитаты или мысли о книге",
+    "voice_saved": "🎤 Голосовая заметка сохранена",
 }
 
 EN = {
@@ -340,21 +382,28 @@ EN = {
     "start": (
         "📚 <b>Tomik</b>: your bookshelf.\n\n"
         "Send a book title or ISBN, or a photo of the barcode, and I'll add the book to your shelf.\n\n"
+        "📚 <b>Main:</b>\n"
         "/shelf: shelf and tags\n"
         "/timer: reading timer\n"
         "/recs: what to read next\n"
-        "/stats: statistics\n"
-        "/badges: badges, /card: summary picture\n"
+        "/stats: statistics\n\n"
+        "📊 <b>Analytics:</b>\n"
+        "/heatmap: activity heatmap\n"
+        "/insights: personal insights & predictions\n"
+        "/badges: achievement badges\n"
+        "/card: summary picture\n\n"
+        "⚙️ <b>Settings:</b>\n"
         "/week: weekly recap\n"
         "/goal: monthly goal\n"
-        "/remind: reading reminder\n"
-        "/read 30: log pages you read\n"
-        "/add: add a book manually\n"
-        "/import: import from Goodreads / Livelib (CSV)\n"
-        "/export: notes and quotes\n"
-        "/lang: language\n\n"
-        "👥 Add me to a group with friends: reading leaderboard, daily and weekly summaries, shared challenge.\n\n"
-        "📢 Our news channel: @tomik_tg\n"
+        "/remind: reading reminder\n\n"
+        "✍️ <b>Adding:</b>\n"
+        "/read 30: log pages\n"
+        "/add: add manually\n"
+        "/import: import from Goodreads/Livelib\n"
+        "/export: export notes\n\n"
+        "👥 Add me to a group: leaderboards, book clubs, challenges!\n\n"
+        "💡 <b>Inline mode:</b> @{bot} title → search books in any chat\n\n"
+        "📢 Channel: @tomik_tg\n"
         "🛠 Made by: @fyave"
     ),
     "cancelled": "Okay, cancelled.",
@@ -628,6 +677,16 @@ EN = {
     "cmd_import": "Import from CSV",
     "cmd_challenge": "Group challenge",
     "cmd_weekly": "Weekly group summary",
+    "cmd_heatmap": "Activity heatmap",
+    "cmd_insights": "Personal insights",
+    "cmd_club_create": "Create a book club",
+    "cmd_club_join": "Join the club",
+    "cmd_club_leave": "Leave the club",
+    "cmd_club_book": "Club's book of the month",
+    "cmd_club_info": "Club info",
+    # --- level system ---
+    "cmd_level": "My level",
+    "cmd_profile": "My profile",
     # --- badges ---
     "bd_head": "🏅 <b>Your badges</b> ({got}/{total})",
     "bd_next": " → next {n} (now {cur})",
@@ -667,6 +726,31 @@ EN = {
     "months_full": "January February March April May June July August September October November December",
     "cmd_badges": "My badges",
     "cmd_card": "Summary picture",
+    # --- inline mode ---
+    "inline_hint": "📚 Type a book title to search",
+    "inline_no_results": "😕 Nothing found",
+    # --- heatmap ---
+    "heatmap_title": "📅 <b>Your reading activity</b>",
+    "heatmap_legend": "□ no data  ▪ 1-5 p  ▫ 6-20 p  ▪ 21-50 p  ▪ 51+ p",
+    "heatmap_total": "📊 Period: {pages} p. · {days} active days",
+    # --- analytics ---
+    "predict_finish": "📖 You'll finish around <b>{date}</b> ({days} days left)",
+    "predict_nodata": "Not enough data for prediction yet — read regularly!",
+    "insights_title": "💡 <b>Your insights</b>",
+    "insights_best_day": "🏆 Most productive day: {day}",
+    "insights_best_time": "⏰ Best reading time: {time}",
+    "insights_genre_trend": "📈 Lately reading more: {genre}",
+    "insights_slow_book": "🐌 Book «{title}» has been in «Reading» for {days} days",
+    # --- book clubs ---
+    "club_create": "📚 Create a book club: /club_create Club Name",
+    "club_created": "✨ Club «{name}» created! Join: /club_join {id}",
+    "club_joined": "✅ {user} joined club «{name}»",
+    "club_leave": "👋 {user} left club «{name}»",
+    "club_book_set": "📖 Book of the month: «{title}» — {author}",
+    "club_discuss": "💬 Discussion in club «{name}»:",
+    # --- voice notes ---
+    "voice_hint": "📝 Send a voice note when adding a quote or thought about a book",
+    "voice_saved": "🎤 Voice note saved",
 }
 
 TEXTS = {"ru": RU, "en": EN}
