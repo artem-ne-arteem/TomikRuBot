@@ -87,8 +87,8 @@
 ## 📞 Контакты по вопросам данных:
 
 **Ответственный за обработку:**
-- Имя: [Ваше имя]
-- Email: [ваш email]
+- Имя: [Артем]
+- Email: [linguilogin@gmail.com]
 - Telegram: [@fyave](https://t.me/fyave)
 
 **Запросы GDPR:**
