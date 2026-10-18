@@ -293,6 +293,26 @@ RU = {
     "cmd_shelf_image": "Картинка полки (для соцсетей)",
     "cmd_year": "Год в книгах (инфографика)",
     "cmd_version": "Версия бота",
+    "cmd_legal": "Приватность и условия",
+    "legal_info": (
+        "📜 <b>Юридическая информация</b>\n\n"
+        "<b>Что мы собираем:</b>\n"
+        "• Telegram ID и имя\n"
+        "• Книги, страницы, заметки\n"
+        "• Настройки и цели\n\n"
+        "<b>Чего НЕ собираем:</b>\n"
+        "• Пароли и личные сообщения\n"
+        "• Местоположение и IP\n"
+        "• Контакты и файлы\n\n"
+        "<b>Ваши права:</b>\n"
+        "• /export — скачать данные\n"
+        "• /export_csv — библиотека в CSV\n"
+        "• Удалить всё — напишите @fyave\n\n"
+        "🔒 Данные хранятся локально, не передаются третьим лицам.\n\n"
+        "Полные документы: github.com/[repo]/legal\n"
+        "Контакты: @fyave · Канал: @tomik_tg\n\n"
+        "<i>Используя бота, вы соглашаетесь с условиями использования и политикой конфиденциальности.</i>"
+    ),
 
     # --- импорт ---
     "import_help": (
@@ -702,6 +722,26 @@ EN = {
     "cmd_shelf_image": "Shelf image (for social media)",
     "cmd_year": "Year in books (infographic)",
     "cmd_version": "Bot version",
+    "cmd_legal": "Privacy & terms",
+    "legal_info": (
+        "📜 <b>Legal Information</b>\n\n"
+        "<b>What we collect:</b>\n"
+        "• Telegram ID and name\n"
+        "• Books, pages, notes\n"
+        "• Settings and goals\n\n"
+        "<b>What we DON'T collect:</b>\n"
+        "• Passwords and private messages\n"
+        "• Location and IP address\n"
+        "• Contacts and files\n\n"
+        "<b>Your rights:</b>\n"
+        "• /export — download your data\n"
+        "• /export_csv — library in CSV\n"
+        "• Delete everything — contact @fyave\n\n"
+        "🔒 Data is stored locally, not shared with third parties.\n\n"
+        "Full documents: github.com/[repo]/legal\n"
+        "Contacts: @fyave · Channel: @tomik_tg\n\n"
+        "<i>By using the bot, you agree to the terms of service and privacy policy.</i>"
+    ),
 
     # --- import ---
     "import_help": (

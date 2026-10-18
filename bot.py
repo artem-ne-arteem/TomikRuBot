@@ -1274,6 +1274,12 @@ async def version_cmd(m: Message):
     await m.answer(f"📦 <b>Томик</b> v{VERSION}\n\nПоследнее обновление: челленджи, отзывы, тренды, ВАУ-эффекты 🎨")
 
 
+@pr.message(Command("legal"))
+async def legal_cmd(m: Message):
+    """Юридическая информация: приватность и условия."""
+    await m.answer(t(m.from_user.id, "legal_info"), disable_web_page_preview=True)
+
+
 @pr.message(Command("stats"))
 async def stats_cmd(m: Message):
     await m.answer(stats_text(m.from_user.id))
@@ -4683,7 +4689,7 @@ async def set_commands(bot: Bot) -> None:
         "shelf", "stats", "level", "profile", "badges", "card",
         "timer", "read", "goal", "challenge", "week", "heatmap", "insights",
         "shelf_image", "year", "version",
-        "recs", "add", "import", "export", "remind", "lang", "cancel",
+        "recs", "add", "import", "export", "remind", "lang", "legal", "cancel",
     ]
     groups = [
         "join", "leave", "top", "read", "challenge", "weekly", "digest", "lang",
