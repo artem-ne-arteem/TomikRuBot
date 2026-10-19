@@ -84,7 +84,59 @@ UNKNOWN_AUTHORS = {"", "—", "Автор неизвестен", "Unknown author
 BOT_USERNAME = ""  # заполняется при старте
 BOT_REF = None  # объект бота для фоновых уведомлений
 
-VERSION = "1.3.0"  # версия бота
+VERSION = "1.4.0"  # версия бота
+
+# ---------- Цитаты дня ----------
+QUOTES_RU = [
+    ("Чтение — это разговор с самыми мудрыми людьми прошлых веков.", "Рене Декарт"),
+    ("Книга — окно, открытое в мир.", "Народная мудрость"),
+    ("Читая хорошую книгу, мы мыслим чужими мыслями.", "Артур Шопенгауэр"),
+    ("Библиотека — это аптека для души.", "Древние греки"),
+    ("Кто много читает, тот много ходит.", "Малазийская пословица"),
+    ("Книги — корабли мысли, странствующие по волнам времени.", "Фрэнсис Бэкон"),
+    ("Читатель проживает тысячу жизней. Нечитающий — только одну.", "Джордж Мартин"),
+    ("Хорошая книга — лучший из друзей, верный навсегда.", "Эрнест Хемингуэй"),
+    ("Чтение доставляет нам незнакомых друзей.", "Оноре де Бальзак"),
+    ("Покупая книгу, мы покупаем целую жизнь.", "Джозеф Бродский"),
+    ("Книги — дети разума.", "Джонатан Свифт"),
+    ("Учиться читать — значит зажигать огонь.", "Виктор Гюго"),
+    ("Чтение хороших книг — это разговор с лучшими людьми прошедших времён.", "Рене Декарт"),
+    ("Все мои знания — из книг.", "Лев Толстой"),
+    ("Если бы я мог выбрать одно качество, это была бы любовь к чтению.", "Джон Кеннеди"),
+    ("Книга — это подарок, который можно открывать снова и снова.", "Гаррисон Форд"),
+    ("Человек с книгой в руках никогда не бывает одинок.", "Карло Гольдони"),
+    ("Чтение — основа всех знаний.", "Стивен Хокинг"),
+    ("Книги — самый тихий и постоянный из друзей.", "Чарльз Элиот"),
+    ("Страницы книг — это крылья для нашего воображения.", "Аноним"),
+]
+
+QUOTES_EN = [
+    ("A reader lives a thousand lives before he dies. The man who never reads lives only one.", "George R.R. Martin"),
+    ("A book is a gift you can open again and again.", "Garrison Keillor"),
+    ("Reading is to the mind what exercise is to the body.", "Joseph Addison"),
+    ("Books are a uniquely portable magic.", "Stephen King"),
+    ("There is no friend as loyal as a book.", "Ernest Hemingway"),
+    ("I find television very educating. Every time somebody turns on the set, I go into the other room and read a book.", "Groucho Marx"),
+    ("Books are the quietest and most constant of friends.", "Charles W. Eliot"),
+    ("Reading gives us someplace to go when we have to stay where we are.", "Mason Cooley"),
+    ("The more that you read, the more things you will know.", "Dr. Seuss"),
+    ("Books and doors are the same thing. You open them, and you go through into another world.", "Jeanette Winterson"),
+    ("A room without books is like a body without a soul.", "Marcus Tullius Cicero"),
+    ("Think before you speak. Read before you think.", "Fran Lebowitz"),
+    ("Once you learn to read, you will be forever free.", "Frederick Douglass"),
+    ("Reading maketh a full man; conference a ready man; and writing an exact man.", "Francis Bacon"),
+    ("I have always imagined that Paradise will be a kind of library.", "Jorge Luis Borges"),
+]
+
+
+def quote_of_day(uid: int) -> str:
+    """Цитата дня — меняется каждый день, одна и та же для всех."""
+    lang = lang_of(uid)
+    quotes = QUOTES_RU if lang == "ru" else QUOTES_EN
+    idx = now_local().date().toordinal() % len(quotes)
+    text, author = quotes[idx]
+    return t(uid, "quote_of_day", q=text, a=author)
+
 
 # ---------- БД ----------
 def init_db():
@@ -1285,6 +1337,130 @@ async def stats_cmd(m: Message):
     await m.answer(stats_text(m.from_user.id))
 
 
+@pr.message(Command("quote"))
+async def quote_cmd(m: Message):
+    """Цитата дня о чтении."""
+    await m.answer(quote_of_day(m.from_user.id))
+
+
+@pr.message(Command("finish"))
+async def finish_cmd(m: Message):
+    """Быстро завершить текущую книгу одной командой."""
+    uid = m.from_user.id
+    b = db.execute(
+        "SELECT * FROM books WHERE user_id=? AND status='reading' ORDER BY id DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+    if not b:
+        await m.answer(t(uid, "finish_none"))
+        return
+    set_status(b["id"], uid, "done")
+    nb = get_book(b["id"], uid)
+    note = t(uid, "book_done")
+    cur, _ = streaks(uid)
+    if cur:
+        note += "\n" + t(uid, "streak_line", n=cur)
+    gl = goal_line(uid)
+    if gl:
+        note += "\n" + gl
+    await send_card(m.bot, m.chat.id, nb, note)
+    await check_challenges(m.bot, uid)
+    await announce_badges(m.bot, uid, m.chat.id)
+
+
+@pr.message(Command("speed"))
+async def speed_cmd(m: Message):
+    """Скорость чтения: страниц в день, прогнозы."""
+    uid = m.from_user.id
+    today = now_local().date()
+
+    p7 = pages_between(uid, (today - timedelta(days=7)).isoformat())
+    p30 = pages_between(uid, (today - timedelta(days=30)).isoformat())
+    p_all = pages_between(uid, "0000-01-01")
+
+    days7, days30 = 7, 30
+    v7 = p7 / days7
+    v30 = p30 / days30
+
+    # Дата первой записи
+    first = db.execute(
+        "SELECT MIN(day) d FROM reading_log WHERE user_id=?", (uid,)
+    ).fetchone()
+    total_days = max(1, (today - date.fromisoformat(first["d"])).days + 1) if first and first["d"] else 1
+    v_all = p_all / total_days
+
+    reading = db.execute(
+        "SELECT * FROM books WHERE user_id=? AND status='reading' ORDER BY id DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+
+    lines = [t(uid, "speed_head"), ""]
+    lines.append(t(uid, "speed_week", v=f"{v7:.1f}"))
+    lines.append(t(uid, "speed_month", v=f"{v30:.1f}"))
+    lines.append(t(uid, "speed_all", v=f"{v_all:.1f}"))
+
+    if reading and reading["pages"]:
+        remaining = reading["pages"] - (reading["page"] or 0)
+        if remaining > 0 and v30 > 0:
+            days = math.ceil(remaining / v30)
+            finish = (today + timedelta(days=days)).strftime("%d.%m.%Y")
+            lines.append("")
+            lines.append(t(uid, "speed_forecast", title=escape(reading["title"]), date=finish, days=days))
+
+    if v30 > 0:
+        book_avg = 300  # средняя книга ~300 стр.
+        per_month = round(v30 * 30 / book_avg, 1)
+        lines.append("")
+        lines.append(t(uid, "speed_books", n=per_month))
+
+    await m.answer("\n".join(lines))
+
+
+# ---------- Забытые книги (в «читаю» >30 дней без прогресса) ----------
+def stale_books(uid: int, days: int = 30) -> list:
+    """Книги в статусе 'читаю', по которым не было прогресса >days дней."""
+    cutoff = (now_local().date() - timedelta(days=days)).isoformat()
+    rows = db.execute(
+        """SELECT b.* FROM books b
+           WHERE b.user_id=? AND b.status='reading'
+           AND NOT EXISTS (
+               SELECT 1 FROM reading_log r
+               WHERE r.user_id=b.user_id AND r.book_id=b.id AND r.day>=?
+           )""",
+        (uid, cutoff),
+    ).fetchall()
+    return rows
+
+
+@pr.message(Command("stale"))
+async def stale_cmd(m: Message):
+    """Книги, которые вы давно читаете (нет прогресса 30+ дней)."""
+    uid = m.from_user.id
+    rows = stale_books(uid)
+    if not rows:
+        await m.answer(t(uid, "stale_none"))
+        return
+    lines = [t(uid, "stale_head"), ""]
+    kb = InlineKeyboardBuilder()
+    for b in rows[:8]:
+        started = b["started_at"] or "?"
+        lines.append(f"📖 <b>{escape(b['title'])}</b> — {t(uid, 'stale_since', d=started)}")
+        kb.row(btn(f"📈 {b['title'][:35]}", f"prog:{b['id']}"))
+    kb.row(btn(t(uid, "stale_drop_all"), "stale_dropall"))
+    await m.answer("\n".join(lines), reply_markup=kb.as_markup())
+
+
+@pr.callback_query(F.data == "stale_dropall")
+async def cb_stale_dropall(c: CallbackQuery):
+    """Массово пометить забытые книги как 'брошено'."""
+    uid = c.from_user.id
+    rows = stale_books(uid)
+    for b in rows:
+        set_status(b["id"], uid, "dropped")
+    await c.message.edit_text(t(uid, "stale_dropped", n=len(rows)))
+    await c.answer()
+
+
 @pr.message(Command("cancel"))
 async def cancel(m: Message):
     PENDING.pop(m.from_user.id, None)
@@ -1510,15 +1686,16 @@ async def send_reminder(bot: Bot, uid: int) -> None:
     ).fetchall()
     cur, _ = streaks(uid)
     streak = ("\n\n" + t(uid, "rem_streak", n=cur)) if (cur and not read_today(uid)) else ""
+    quote = "\n\n" + quote_of_day(uid)
     if rows:
         kb = InlineKeyboardBuilder()
         lines = [t(uid, "rem_title"), "", t(uid, "rem_in_progress")]
         for b in rows:
             lines.append(f"• {escape(b['title'])} — {progress_text(uid, b['page'] or 0, b['pages'])}")
             kb.row(btn(f"📈 {b['title'][:40]}", f"prog:{b['id']}"))
-        await bot.send_message(uid, "\n".join(lines) + streak, reply_markup=kb.as_markup())
+        await bot.send_message(uid, "\n".join(lines) + streak + quote, reply_markup=kb.as_markup())
     else:
-        await bot.send_message(uid, t(uid, "rem_title") + "\n\n" + t(uid, "rem_empty") + streak)
+        await bot.send_message(uid, t(uid, "rem_title") + "\n\n" + t(uid, "rem_empty") + streak + quote)
 
 
 # ---------- Добавление книги вручную ----------
@@ -4649,6 +4826,26 @@ async def reminder_loop(bot: Bot) -> None:
                 set_meta("last_backup", today)
                 await send_backup(bot)
 
+            if now.weekday() == 2 and 1080 <= now_min < 1090:  # среда ~18:00: напомнить о забытых книгах
+                for u in db.execute(
+                    "SELECT user_id FROM users WHERE remind_time IS NOT NULL AND last_seen>=?",
+                    ((now.date() - timedelta(days=7)).isoformat(),),
+                ).fetchall():
+                    try:
+                        rows = stale_books(u["user_id"])
+                        if rows:
+                            lang = lang_of(u["user_id"])
+                            lines = [tl(lang, "stale_remind"), ""]
+                            for b in rows[:3]:
+                                lines.append(f"📖 {escape(b['title'])}")
+                            lines.append("")
+                            lines.append(tl(lang, "stale_remind_hint"))
+                            await bot.send_message(u["user_id"], "\n".join(lines))
+                    except TelegramForbiddenError:
+                        pass
+                    except Exception:
+                        logging.exception("stale reminder failed for %s", u["user_id"])
+
             if now.weekday() == 0 and 600 <= now_min < 610:  # понедельник 10:00: итоги прошлой недели
                 for u in db.execute(
                     "SELECT user_id FROM users WHERE weekly_on=1 AND (weekly_last IS NULL OR weekly_last != ?)",
@@ -4689,6 +4886,7 @@ async def set_commands(bot: Bot) -> None:
         "shelf", "stats", "level", "profile", "badges", "card",
         "timer", "read", "goal", "challenge", "week", "heatmap", "insights",
         "shelf_image", "year", "version",
+        "quote", "finish", "speed", "stale",
         "recs", "add", "import", "export", "remind", "lang", "legal", "cancel",
     ]
     groups = [

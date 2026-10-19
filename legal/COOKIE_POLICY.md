@@ -61,7 +61,7 @@
 
 ## Вопросы?
 
-📧 Email: linguilogin@gmail.com  
+📧 Email: [ваш email]  
 💬 Telegram: [@fyave](https://t.me/fyave)
 
 ---

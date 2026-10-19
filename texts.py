@@ -13,13 +13,20 @@ RU = {
         "📊 <b>Аналитика:</b>\n"
         "/heatmap — тепловая карта активности\n"
         "/insights — персональные инсайты и прогнозы\n"
+        "/speed — скорость чтения и прогноз\n"
         "/badges — значки достижений\n"
         "/card — картинка с итогами\n\n"
         "⚙️ <b>Настройки:</b>\n"
         "/week — итоги недели\n"
         "/goal — цель на месяц\n"
         "/challenge — челленджи на месяц/год\n"
+        "/stale — забытые книги\n"
         "/remind — напоминание почитать\n\n"
+        "✨ <b>Бонус:</b>\n"
+        "/quote — цитата дня\n"
+        "/finish — быстро завершить книгу\n"
+        "/shelf_image — красивая картинка полки\n"
+        "/year — твой год в книгах\n\n"
         "✍️ <b>Добавление:</b>\n"
         "/read 30 — записать страницы\n"
         "/add — добавить книгу вручную\n"
@@ -309,8 +316,8 @@ RU = {
         "• /export_csv — библиотека в CSV\n"
         "• Удалить всё — напишите @fyave\n\n"
         "🔒 Данные хранятся локально, не передаются третьим лицам.\n\n"
-        "Полные документы: github.com/artem-ne-arteem/TomikRuBot"
-        "Контакты: @fyave · Канал: @tomik_tg Вопросы: @fyave"
+        "Полные документы: github.com/[repo]/legal\n"
+        "Контакты: @fyave · Канал: @tomik_tg\n\n"
         "<i>Используя бота, вы соглашаетесь с условиями использования и политикой конфиденциальности.</i>"
     ),
 
@@ -428,6 +435,29 @@ RU = {
     # --- тренды ---
     "trend_up": "Темп чтения растёт!",
     "trend_down": "Темп снизился",
+    # --- цитата дня ---
+    "quote_of_day": "💬 <i>«{q}»</i>\n— {a}",
+    "cmd_quote": "Цитата дня",
+    # --- быстрое завершение ---
+    "cmd_finish": "Завершить книгу",
+    "finish_none": "Нет книг в статусе «Читаю». Открой книгу на полке и отметь «📖 Читаю».",
+    # --- скорость чтения ---
+    "cmd_speed": "Скорость чтения",
+    "speed_head": "⚡ <b>Твоя скорость чтения</b>",
+    "speed_week": "📅 За 7 дней: {v} стр./день",
+    "speed_month": "🗓 За 30 дней: {v} стр./день",
+    "speed_all": "📊 Средняя за всё время: {v} стр./день",
+    "speed_forecast": "📖 «{title}» дочитаешь к <b>{date}</b> (~{days} дн.)",
+    "speed_books": "📚 При таком темпе — ~{n} книг в месяц",
+    # --- забытые книги ---
+    "cmd_stale": "Забытые книги",
+    "stale_none": "У тебя нет забытых книг. Молодец! 🎉",
+    "stale_head": "🐌 <b>Давно читаешь без прогресса:</b>",
+    "stale_since": "с {d}",
+    "stale_drop_all": "🚫 Бросить все",
+    "stale_dropped": "Пометил {n} книг как брошенные.",
+    "stale_remind": "🐌 <b>Напоминание о книгах</b>",
+    "stale_remind_hint": "Эти книги давно ждут. Продолжи или отпусти? /stale",
 
 }
 
@@ -444,12 +474,20 @@ EN = {
         "📊 <b>Analytics:</b>\n"
         "/heatmap: activity heatmap\n"
         "/insights: personal insights & predictions\n"
+        "/speed: reading speed & forecast\n"
         "/badges: achievement badges\n"
         "/card: summary picture\n\n"
         "⚙️ <b>Settings:</b>\n"
         "/week: weekly recap\n"
         "/goal: monthly goal\n"
+        "/challenge: monthly/yearly challenges\n"
+        "/stale: forgotten books\n"
         "/remind: reading reminder\n\n"
+        "✨ <b>Bonus:</b>\n"
+        "/quote: quote of the day\n"
+        "/finish: quickly finish current book\n"
+        "/shelf_image: pretty shelf picture\n"
+        "/year: your year in books\n\n"
         "✍️ <b>Adding:</b>\n"
         "/read 30: log pages\n"
         "/add: add manually\n"
@@ -857,6 +895,29 @@ EN = {
     # --- trends ---
     "trend_up": "Reading pace is increasing!",
     "trend_down": "Pace has slowed down",
+    # --- quote of the day ---
+    "quote_of_day": "💬 <i>«{q}»</i>\n— {a}",
+    "cmd_quote": "Quote of the day",
+    # --- quick finish ---
+    "cmd_finish": "Finish book",
+    "finish_none": "No books marked «Reading». Open a book on your shelf and tap «📖 Reading».",
+    # --- reading speed ---
+    "cmd_speed": "Reading speed",
+    "speed_head": "⚡ <b>Your reading speed</b>",
+    "speed_week": "📅 Last 7 days: {v} p./day",
+    "speed_month": "🗓 Last 30 days: {v} p./day",
+    "speed_all": "📊 All-time average: {v} p./day",
+    "speed_forecast": "📖 You'll finish «{title}» by <b>{date}</b> (~{days} days)",
+    "speed_books": "📚 At this pace — ~{n} books a month",
+    # --- stale books ---
+    "cmd_stale": "Forgotten books",
+    "stale_none": "No forgotten books. Well done! 🎉",
+    "stale_head": "🐌 <b>Long time no progress:</b>",
+    "stale_since": "since {d}",
+    "stale_drop_all": "🚫 Drop all",
+    "stale_dropped": "Marked {n} books as dropped.",
+    "stale_remind": "🐌 <b>Book reminder</b>",
+    "stale_remind_hint": "These books have been waiting. Continue or let go? /stale",
 
 }
 

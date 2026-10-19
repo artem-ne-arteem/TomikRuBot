@@ -210,12 +210,12 @@
 ## 13. Контакты
 
 **По вопросам условий использования:**
-- 📧 Email: [linguilogin@gmail.com]
+- 📧 Email: [ваш email]
 - 💬 Telegram: [@fyave](https://t.me/fyave)
-- 🔗 GitHub: [https://github.com/artem-ne-arteem/TomikRuBot/edit/main/legal/]
+- 🔗 GitHub: [ссылка на репозиторий]
 
 **Юридические вопросы:**
-- Email: [linguilogin@gmail.com]
+- Email: [ваш email]
 - Тема: «Legal Inquiry»
 
 ---
